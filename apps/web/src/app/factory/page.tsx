@@ -1,0 +1,462 @@
+'use client';
+
+// Agent Factory：左侧需求澄清对话，右侧四步创建流程
+// 1 需求澄清 -> 2 选择候选 Agent -> 3 配置 DNA -> 4 测试并创建
+import {
+  type AgentSuggestion,
+  parseAgentSuggestions,
+  stripSuggestionBlocks,
+} from '@agent-os/shared';
+import { Bot, ChevronLeft, Play, Send, Sparkles } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { useRef, useState } from 'react';
+import { Badge, Button, Field, Input, Textarea } from '@/components/ui';
+import { useWorkbenchStore } from '@/lib/store';
+import { trpc } from '@/lib/trpc';
+import {
+  cn,
+  consumeTextStream,
+  providerOptionLabel,
+  RUNTIME_URL,
+  readRuntimeError,
+} from '@/lib/utils';
+
+type ChatMsg = { role: 'user' | 'assistant'; content: string };
+
+type DnaDraft = {
+  name: string;
+  description: string;
+  prompt: string;
+  modelProfileId: string | null;
+  skillIds: string[];
+  toolIds: string[];
+  knowledgeBaseIds: string[];
+};
+
+const EMPTY_DRAFT: DnaDraft = {
+  name: '',
+  description: '',
+  prompt: '',
+  modelProfileId: null,
+  skillIds: [],
+  toolIds: [],
+  knowledgeBaseIds: [],
+};
+
+const STEPS = ['需求澄清', '选择候选', '配置 DNA', '测试创建'] as const;
+
+export default function FactoryPage() {
+  const router = useRouter();
+  const { setCurrentAgent } = useWorkbenchStore();
+  const utils = trpc.useUtils();
+
+  const { data: resourceList = [] } = trpc.resource.list.useQuery({});
+  const providers = resourceList.filter((r) => r.type === 'provider');
+  const skills = resourceList.filter((r) => r.type === 'skill');
+  const tools = resourceList.filter((r) => r.type === 'tool');
+  const kbs = resourceList.filter((r) => r.type === 'knowledge_base');
+
+  const createAgent = trpc.agent.create.useMutation();
+
+  // ---- 左侧需求对话 ----
+  const [msgs, setMsgs] = useState<ChatMsg[]>([]);
+  const [input, setInput] = useState('');
+  const [streaming, setStreaming] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  // 从全部助手回复中收集候选建议（后出现的优先展示在前）
+  const suggestions: AgentSuggestion[] = msgs
+    .filter((m) => m.role === 'assistant')
+    .flatMap((m) => parseAgentSuggestions(m.content))
+    .reverse();
+
+  // ---- 右侧四步流程 ----
+  const [step, setStep] = useState(0);
+  const [draft, setDraft] = useState<DnaDraft>(EMPTY_DRAFT);
+  const [testInput, setTestInput] = useState('');
+  const [testOutput, setTestOutput] = useState<string | null>(null);
+  const [testRunning, setTestRunning] = useState(false);
+
+  async function sendFactoryChat() {
+    const text = input.trim();
+    if (!text || streaming !== null) return;
+    setError(null);
+    const next: ChatMsg[] = [...msgs, { role: 'user', content: text }];
+    setMsgs(next);
+    setInput('');
+    setStreaming('');
+    try {
+      const res = await fetch(`${RUNTIME_URL}/factory/chat`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ messages: next }),
+      });
+      if (!res.ok) {
+        setError(await readRuntimeError(res));
+        return;
+      }
+      const full = await consumeTextStream(res, (t) => {
+        setStreaming(stripSuggestionBlocks(t));
+        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      });
+      setMsgs((prev) => [...prev, { role: 'assistant', content: full }]);
+      if (parseAgentSuggestions(full).length > 0 && step === 0) setStep(1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '请求失败，请检查 Runtime 服务');
+    } finally {
+      setStreaming(null);
+    }
+  }
+
+  function pickSuggestion(s: AgentSuggestion) {
+    setDraft({
+      ...EMPTY_DRAFT,
+      name: s.name,
+      description: s.description,
+      prompt: s.systemPrompt ?? '',
+      modelProfileId: providers[0]?.id ?? null,
+    });
+    setStep(2);
+  }
+
+  async function runTest() {
+    if (!draft.prompt.trim() || !draft.modelProfileId || !testInput.trim() || testRunning) return;
+    setError(null);
+    setTestRunning(true);
+    setTestOutput('');
+    try {
+      const res = await fetch(`${RUNTIME_URL}/test-run`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          systemPrompt: draft.prompt,
+          modelProfileId: draft.modelProfileId,
+          input: testInput,
+        }),
+      });
+      if (!res.ok) {
+        setError(await readRuntimeError(res));
+        setTestOutput(null);
+        return;
+      }
+      await consumeTextStream(res, setTestOutput);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '试跑失败');
+      setTestOutput(null);
+    } finally {
+      setTestRunning(false);
+    }
+  }
+
+  async function handleCreate() {
+    if (!draft.name.trim() || !draft.prompt.trim()) return;
+    setError(null);
+    const agent = await createAgent.mutateAsync({
+      name: draft.name.trim(),
+      description: draft.description.trim() || undefined,
+      status: 'published',
+      dna: {
+        prompt: draft.prompt,
+        modelProfileId: draft.modelProfileId,
+        skillIds: draft.skillIds,
+        toolIds: draft.toolIds,
+        knowledgeBaseIds: draft.knowledgeBaseIds,
+        memoryPolicy: { shortTerm: { type: 'window', maxMessages: 20 } },
+      },
+    });
+    await utils.agent.list.invalidate();
+    setCurrentAgent(agent.id);
+    router.push('/');
+  }
+
+  function toggleId(key: 'skillIds' | 'toolIds' | 'knowledgeBaseIds', id: string) {
+    setDraft((d) => ({
+      ...d,
+      [key]: d[key].includes(id) ? d[key].filter((v) => v !== id) : [...d[key], id],
+    }));
+  }
+
+  return (
+    <div className="flex h-full">
+      {/* 左侧：需求澄清对话 */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex items-center gap-2 border-b border-neutral-200 bg-white px-6 py-3">
+          <Sparkles size={18} className="text-neutral-500" />
+          <h1 className="text-sm font-semibold">Agent Factory</h1>
+          <span className="text-xs text-neutral-400">用自然语言描述需求，推导要创建的 Agent</span>
+        </header>
+
+        <div className="flex-1 overflow-y-auto px-6 py-4">
+          <div className="mx-auto max-w-2xl space-y-4">
+            {msgs.length === 0 && streaming === null && (
+              <div className="mt-16 text-center text-sm text-neutral-400">
+                例如：「我要做短视频脚本生产，需要分析对标脚本并产出新脚本」
+              </div>
+            )}
+            {msgs.map((m, i) => (
+              <div
+                // biome-ignore lint/suspicious/noArrayIndexKey: 无状态对话，索引即顺序
+                key={i}
+                className={cn('flex', m.role === 'user' ? 'justify-end' : 'justify-start')}
+              >
+                <div
+                  className={cn(
+                    'max-w-[85%] whitespace-pre-wrap break-words rounded-lg px-4 py-2.5 text-sm',
+                    m.role === 'user'
+                      ? 'bg-neutral-900 text-white'
+                      : 'border border-neutral-200 bg-white',
+                  )}
+                >
+                  {m.role === 'assistant' ? stripSuggestionBlocks(m.content) : m.content}
+                </div>
+              </div>
+            ))}
+            {streaming !== null && (
+              <div className="flex justify-start">
+                <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-lg border border-neutral-200 bg-white px-4 py-2.5 text-sm">
+                  {streaming || <span className="animate-pulse text-neutral-400">思考中…</span>}
+                </div>
+              </div>
+            )}
+            <div ref={bottomRef} />
+          </div>
+        </div>
+
+        {error && (
+          <div className="mx-6 mb-2 rounded-md bg-red-50 px-3 py-2 text-xs text-red-600">
+            {error}
+          </div>
+        )}
+
+        <div className="border-t border-neutral-200 bg-white px-6 py-3">
+          <div className="mx-auto flex max-w-2xl items-end gap-2">
+            <Textarea
+              rows={1}
+              value={input}
+              placeholder="描述你的业务需求，Enter 发送"
+              className="max-h-32 min-h-9 resize-none"
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  sendFactoryChat();
+                }
+              }}
+            />
+            <Button
+              className="h-9 shrink-0"
+              disabled={streaming !== null || !input.trim()}
+              onClick={sendFactoryChat}
+            >
+              <Send size={15} /> 发送
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* 右侧：四步创建流程 */}
+      <div className="flex w-[440px] shrink-0 flex-col border-l border-neutral-200 bg-white">
+        <div className="flex items-center gap-1 border-b border-neutral-200 px-4 py-3">
+          {STEPS.map((label, i) => (
+            <div key={label} className="flex items-center gap-1">
+              {i > 0 && <div className="h-px w-4 bg-neutral-200" />}
+              <span
+                className={cn(
+                  'flex items-center gap-1 rounded-full px-2.5 py-1 text-xs',
+                  i === step
+                    ? 'bg-neutral-900 font-medium text-white'
+                    : i < step
+                      ? 'bg-neutral-100 text-neutral-600'
+                      : 'text-neutral-400',
+                )}
+              >
+                {i + 1}. {label}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4">
+          {/* Step 0：等待需求澄清 */}
+          {step === 0 && (
+            <div className="mt-12 text-center text-sm text-neutral-400">
+              <Bot size={36} strokeWidth={1.5} className="mx-auto mb-3" />
+              <p>在左侧对话中澄清需求后，</p>
+              <p>候选 Agent 会出现在这里。</p>
+              <Button
+                variant="outline"
+                className="mt-4"
+                onClick={() => {
+                  setDraft({ ...EMPTY_DRAFT, modelProfileId: providers[0]?.id ?? null });
+                  setStep(2);
+                }}
+              >
+                跳过，手动创建
+              </Button>
+            </div>
+          )}
+
+          {/* Step 1：候选 Agent 列表 */}
+          {step === 1 && (
+            <div className="space-y-3">
+              {suggestions.length === 0 && (
+                <p className="text-sm text-neutral-400">暂无候选，请继续在左侧补充需求。</p>
+              )}
+              {suggestions.map((s, i) => (
+                <div
+                  // biome-ignore lint/suspicious/noArrayIndexKey: 建议列表无稳定 id
+                  key={`${s.name}-${i}`}
+                  className="rounded-lg border border-neutral-200 p-3"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-semibold">{s.name}</span>
+                    <Button size="sm" onClick={() => pickSuggestion(s)}>
+                      选择
+                    </Button>
+                  </div>
+                  <p className="mt-1 text-xs text-neutral-500">{s.description}</p>
+                  {s.reason && <p className="mt-1 text-xs text-neutral-400">理由：{s.reason}</p>}
+                </div>
+              ))}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setDraft({ ...EMPTY_DRAFT, modelProfileId: providers[0]?.id ?? null });
+                  setStep(2);
+                }}
+              >
+                手动创建
+              </Button>
+            </div>
+          )}
+
+          {/* Step 2：配置 DNA */}
+          {step === 2 && (
+            <div>
+              <Field label="Agent 名称">
+                <Input
+                  value={draft.name}
+                  onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
+                />
+              </Field>
+              <Field label="职责描述">
+                <Input
+                  value={draft.description}
+                  onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
+                />
+              </Field>
+              <Field label="系统提示词（Prompt）">
+                <Textarea
+                  rows={8}
+                  value={draft.prompt}
+                  onChange={(e) => setDraft((d) => ({ ...d, prompt: e.target.value }))}
+                />
+              </Field>
+              <Field label="模型 Provider">
+                <select
+                  className="h-9 w-full rounded-md border border-neutral-300 bg-white px-2 text-sm"
+                  value={draft.modelProfileId ?? ''}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, modelProfileId: e.target.value || null }))
+                  }
+                >
+                  <option value="">（未绑定，使用默认）</option>
+                  {providers.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {providerOptionLabel(p)}
+                    </option>
+                  ))}
+                </select>
+                {providers.length === 0 && (
+                  <p className="mt-1 text-xs text-amber-600">
+                    暂无 Provider，请先到「资源与凭证」添加模型配置
+                  </p>
+                )}
+              </Field>
+              {(
+                [
+                  ['skillIds', 'Skills', skills],
+                  ['toolIds', 'Tools', tools],
+                  ['knowledgeBaseIds', '知识库', kbs],
+                ] as const
+              ).map(([key, label, list]) => (
+                <Field key={key} label={label}>
+                  <div className="flex flex-wrap gap-1.5">
+                    {list.length === 0 && <span className="text-xs text-neutral-400">暂无</span>}
+                    {list.map((r) => (
+                      <button key={r.id} type="button" onClick={() => toggleId(key, r.id)}>
+                        <Badge tone={draft[key].includes(r.id) ? 'blue' : 'neutral'}>
+                          {r.name}
+                        </Badge>
+                      </button>
+                    ))}
+                  </div>
+                </Field>
+              ))}
+              <div className="mt-2 flex justify-between">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setStep(suggestions.length ? 1 : 0)}
+                >
+                  <ChevronLeft size={14} /> 上一步
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={!draft.name.trim() || !draft.prompt.trim()}
+                  onClick={() => setStep(3)}
+                >
+                  下一步
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Step 3：测试并创建 */}
+          {step === 3 && (
+            <div>
+              <div className="mb-3 rounded-md bg-neutral-50 p-3 text-xs text-neutral-500">
+                <div className="font-medium text-neutral-700">{draft.name}</div>
+                <div className="mt-0.5">{draft.description || '（无描述）'}</div>
+              </div>
+              <Field label="测试输入（试跑不落库）">
+                <Textarea
+                  rows={3}
+                  value={testInput}
+                  onChange={(e) => setTestInput(e.target.value)}
+                  placeholder="输入一段测试内容，验证 Prompt 效果"
+                />
+              </Field>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={testRunning || !testInput.trim() || !draft.modelProfileId}
+                onClick={runTest}
+              >
+                <Play size={13} /> 试跑
+              </Button>
+              {!draft.modelProfileId && (
+                <p className="mt-1 text-xs text-amber-600">试跑需要先在上一步绑定模型 Provider</p>
+              )}
+              {testOutput !== null && (
+                <pre className="mt-3 max-h-60 overflow-auto whitespace-pre-wrap rounded-md bg-neutral-50 p-3 text-xs">
+                  {testOutput || '生成中…'}
+                </pre>
+              )}
+              <div className="mt-4 flex justify-between">
+                <Button variant="outline" size="sm" onClick={() => setStep(2)}>
+                  <ChevronLeft size={14} /> 上一步
+                </Button>
+                <Button size="sm" disabled={createAgent.isPending} onClick={handleCreate}>
+                  {createAgent.isPending ? '创建中…' : '创建 Agent'}
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

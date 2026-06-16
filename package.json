@@ -1,0 +1,28 @@
+{
+  "name": "agent-factory",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AgentOS - single Agent MVP (local-only)",
+  "packageManager": "pnpm@10.0.0",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "db:generate": "pnpm --filter @agent-os/db db:generate",
+    "db:migrate": "pnpm --filter @agent-os/db db:migrate",
+    "db:push": "pnpm --filter @agent-os/db db:push",
+    "db:seed": "pnpm --filter @agent-os/db db:seed"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.0.0",
+    "turbo": "^2.5.0",
+    "typescript": "^5.7.0"
+  }
+}

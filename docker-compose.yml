@@ -1,0 +1,17 @@
+# AgentOS MVP 本地依赖：仅 Postgres（pgvector 预装，MVP 不启用向量能力）
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: agentos-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: agentos
+    ports:
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - agentos_pgdata:/var/lib/postgresql/data
+
+volumes:
+  agentos_pgdata:

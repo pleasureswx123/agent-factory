@@ -1,0 +1,35 @@
+# dependencies
+node_modules/
+
+# build output
+.next/
+dist/
+out/
+.turbo/
+
+# env / secrets
+.env
+.env.local
+.env.*.local
+.agent-os/
+
+# runtime data (local artifact storage)
+data/
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# editors (keep .idea since project uses it)
+*.tsbuildinfo
+
+# test
+coverage/
+.vitest/
+playwright-report/
+test-results/
