@@ -47,6 +47,21 @@ export function Sidebar() {
       if (currentAgentId) utils.conversation.list.invalidate({ agentId: currentAgentId });
     },
   });
+  const deleteAgent = trpc.agent.delete.useMutation({
+    onSuccess: (_result, variables) => {
+      utils.agent.list.invalidate();
+      utils.artifact.list.invalidate();
+      utils.conversation.list.invalidate({ agentId: variables.agentId });
+      if (variables.agentId === currentAgentId) {
+        const nextAgentId = agents.find((agent) => agent.id !== variables.agentId)?.id ?? null;
+        setCurrentAgent(nextAgentId);
+        setCurrentConversation(null);
+        router.push(nextAgentId ? '/' : '/factory');
+        return;
+      }
+      if (pathname === `/agents/${variables.agentId}`) router.push('/');
+    },
+  });
 
   useEffect(() => {
     if (!currentAgentId || currentConversationId || !conversationsLoaded) return;
@@ -143,6 +158,20 @@ export function Sidebar() {
               >
                 <Settings size={14} />
               </Link>
+              <button
+                type="button"
+                aria-label={`删除 Agent：${agent.name}`}
+                title="删除 Agent"
+                disabled={deleteAgent.isPending}
+                onClick={() => {
+                  if (window.confirm(`确定删除 Agent「${agent.name}」？`)) {
+                    deleteAgent.mutate({ agentId: agent.id });
+                  }
+                }}
+                className="ml-1 rounded p-1.5 text-neutral-400 opacity-0 transition-opacity hover:bg-red-50 hover:text-red-600 disabled:opacity-50 group-hover:opacity-100"
+              >
+                <Trash2 size={14} />
+              </button>
             </li>
           ))}
         </ul>

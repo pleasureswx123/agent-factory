@@ -32,7 +32,7 @@ export default function AgentConfigPage() {
   const params = useParams<{ id: string }>();
   const agentId = params.id;
   const router = useRouter();
-  const { setCurrentAgent } = useWorkbenchStore();
+  const { setCurrentAgent, setCurrentConversation } = useWorkbenchStore();
   const utils = trpc.useUtils();
 
   const { data, isLoading } = trpc.agent.get.useQuery({ agentId }, { enabled: !!agentId });
@@ -94,7 +94,9 @@ export default function AgentConfigPage() {
   const deleteAgent = trpc.agent.delete.useMutation({
     onSuccess: async () => {
       await utils.agent.list.invalidate();
+      await utils.artifact.list.invalidate();
       setCurrentAgent(null);
+      setCurrentConversation(null);
       router.push('/');
     },
   });
@@ -360,7 +362,7 @@ export default function AgentConfigPage() {
               <div className="mt-6 rounded-md border border-red-200 p-4">
                 <h3 className="text-sm font-semibold text-red-600">危险操作</h3>
                 <p className="mt-1 text-xs text-neutral-500">
-                  删除为软删除：会话与素材保留，素材会标记「来源 Agent 已删除」。
+                  删除为软删除：对应会话、消息与产出素材会一并删除。
                 </p>
                 <Button
                   variant="danger"

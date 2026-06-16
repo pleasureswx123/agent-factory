@@ -1,4 +1,12 @@
-import { agentDnas, agents, artifacts, type Db, promptVersions, resources } from '@agent-os/db';
+import {
+  agentDnas,
+  agents,
+  artifacts,
+  conversations,
+  type Db,
+  promptVersions,
+  resources,
+} from '@agent-os/db';
 import {
   createAgentSchema,
   DEFAULT_USER_ID,
@@ -183,7 +191,7 @@ export const agentRouter = router({
     return createDnaVersion(ctx.db, input.agentId, promptVersionId, input.dna);
   }),
 
-  /** 软删除：保留素材，标记 sourceAgentDeleted */
+  /** 软删除 Agent，同时清理对应会话与产出素材 */
   delete: publicProcedure
     .input(z.object({ agentId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
@@ -191,10 +199,8 @@ export const agentRouter = router({
         .update(agents)
         .set({ deletedAt: new Date(), updatedAt: new Date() })
         .where(eq(agents.id, input.agentId));
-      await ctx.db
-        .update(artifacts)
-        .set({ sourceAgentDeleted: true })
-        .where(eq(artifacts.agentId, input.agentId));
+      await ctx.db.delete(artifacts).where(eq(artifacts.agentId, input.agentId));
+      await ctx.db.delete(conversations).where(eq(conversations.agentId, input.agentId));
       return { ok: true };
     }),
 
