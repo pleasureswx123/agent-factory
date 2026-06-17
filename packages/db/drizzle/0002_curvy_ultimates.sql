@@ -1,0 +1,2 @@
+ALTER TABLE "agent_dnas" ADD COLUMN "test_cases" jsonb DEFAULT '[]'::jsonb NOT NULL;--> statement-breakpoint
+ALTER TABLE "agent_dnas" ADD COLUMN "evaluation_criteria" jsonb DEFAULT '[]'::jsonb NOT NULL;

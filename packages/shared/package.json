@@ -10,6 +10,7 @@
     "./crypto": "./src/crypto.ts"
   },
   "scripts": {
+    "test": "tsx src/schemas.test.ts && tsx src/recommendations.test.ts && tsx src/factory-dna.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -17,6 +18,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }
 }

@@ -25,6 +25,19 @@ function partsToText(content: MessageContent): string {
     .join('\n');
 }
 
+function buildSystemPrompt(prompt: string, rules: string[], guidelines: string[]): string {
+  const sections = [prompt.trim()];
+  if (rules.length > 0) {
+    sections.push(`Rules:\n${rules.map((rule, i) => `${i + 1}. ${rule}`).join('\n')}`);
+  }
+  if (guidelines.length > 0) {
+    sections.push(
+      `Guidelines:\n${guidelines.map((guideline, i) => `${i + 1}. ${guideline}`).join('\n')}`,
+    );
+  }
+  return sections.join('\n\n');
+}
+
 async function artifactContext(db: Db, ids: string[]): Promise<string> {
   if (ids.length === 0) return '';
   const rows = await db.select().from(artifacts).where(inArray(artifacts.id, ids));
@@ -70,7 +83,11 @@ export async function handleChat(c: Context, db: Db) {
     .from(promptVersions)
     .where(eq(promptVersions.id, dna.promptVersionId))
     .limit(1);
-  const systemPrompt = promptVersion?.content ?? '你是一个乐于助人的 AI 助手。';
+  const systemPrompt = buildSystemPrompt(
+    promptVersion?.content ?? '你是一个乐于助人的 AI 助手。',
+    dna.rules ?? [],
+    dna.guidelines ?? [],
+  );
 
   let profile: Awaited<ReturnType<typeof resolveProviderProfile>>;
   try {

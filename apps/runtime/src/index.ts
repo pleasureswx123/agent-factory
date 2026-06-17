@@ -3,7 +3,12 @@ import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { handleChat } from './routes/chat';
-import { handleFactoryChat, handleTestRun } from './routes/factory';
+import {
+  handleFactoryChat,
+  handleFactoryEvolve,
+  handleTestEvaluate,
+  handleTestRun,
+} from './routes/factory';
 
 const app = new Hono();
 const db = getDb();
@@ -23,7 +28,9 @@ app.get('/health', (c) =>
 
 app.post('/chat', (c) => handleChat(c, db));
 app.post('/factory/chat', (c) => handleFactoryChat(c, db));
+app.post('/factory/evolve', (c) => handleFactoryEvolve(c, db));
 app.post('/test-run', (c) => handleTestRun(c, db));
+app.post('/test-evaluate', (c) => handleTestEvaluate(c, db));
 
 app.onError((err, c) => {
   console.error('[runtime] error:', err);

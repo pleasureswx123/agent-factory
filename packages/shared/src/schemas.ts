@@ -15,7 +15,19 @@ export const memoryPolicySchema = z.object({
 export type MemoryPolicyInput = z.infer<typeof memoryPolicySchema>;
 
 export const dnaConfigSchema = z.object({
+  rules: z.array(z.string().min(1)).default([]),
+  guidelines: z.array(z.string().min(1)).default([]),
   prompt: z.string().min(1, '系统提示词不能为空'),
+  testCases: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        input: z.string().min(1),
+        expected: z.string().min(1),
+      }),
+    )
+    .default([]),
+  evaluationCriteria: z.array(z.string().min(1)).default([]),
   modelProfileId: z.string().uuid().nullable().optional(),
   skillIds: z.array(z.string().uuid()).default([]),
   toolIds: z.array(z.string().uuid()).default([]),

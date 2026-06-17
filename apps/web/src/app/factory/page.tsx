@@ -5,6 +5,7 @@
 import {
   type AgentSuggestion,
   parseAgentSuggestions,
+  recommendAgentResourceIds,
   stripSuggestionBlocks,
 } from '@agent-os/shared';
 import { Bot, ChevronLeft, Play, Send, Sparkles } from 'lucide-react';
@@ -22,11 +23,21 @@ import {
 } from '@/lib/utils';
 
 type ChatMsg = { role: 'user' | 'assistant'; content: string };
+type PublishEvaluation = {
+  status: 'publishable' | 'needs_changes' | 'blocked';
+  summary: string;
+  reasons?: string[];
+  suggestions?: string[];
+};
 
 type DnaDraft = {
   name: string;
   description: string;
+  rules: string[];
+  guidelines: string[];
   prompt: string;
+  testCases: { name: string; input: string; expected: string }[];
+  evaluationCriteria: string[];
   modelProfileId: string | null;
   skillIds: string[];
   toolIds: string[];
@@ -36,7 +47,11 @@ type DnaDraft = {
 const EMPTY_DRAFT: DnaDraft = {
   name: '',
   description: '',
+  rules: [],
+  guidelines: [],
   prompt: '',
+  testCases: [],
+  evaluationCriteria: [],
   modelProfileId: null,
   skillIds: [],
   toolIds: [],
@@ -76,6 +91,7 @@ export default function FactoryPage() {
   const [draft, setDraft] = useState<DnaDraft>(EMPTY_DRAFT);
   const [testInput, setTestInput] = useState('');
   const [testOutput, setTestOutput] = useState<string | null>(null);
+  const [evaluation, setEvaluation] = useState<PublishEvaluation | null>(null);
   const [testRunning, setTestRunning] = useState(false);
 
   async function sendFactoryChat() {
@@ -110,13 +126,25 @@ export default function FactoryPage() {
   }
 
   function pickSuggestion(s: AgentSuggestion) {
+    const recommended = recommendAgentResourceIds(
+      `${s.name}\n${s.description}\n${s.reason}\n${s.systemPrompt ?? ''}`,
+      resourceList,
+    );
     setDraft({
       ...EMPTY_DRAFT,
       name: s.name,
       description: s.description,
+      rules: s.rules ?? [],
+      guidelines: s.guidelines ?? [],
       prompt: s.systemPrompt ?? '',
+      testCases: s.testCases ?? [],
+      evaluationCriteria: s.evaluationCriteria ?? [],
       modelProfileId: providers[0]?.id ?? null,
+      skillIds: recommended.skillIds,
+      toolIds: recommended.toolIds,
+      knowledgeBaseIds: recommended.knowledgeBaseIds,
     });
+    setTestInput(s.testCases?.[0]?.input ?? '');
     setStep(2);
   }
 
@@ -125,12 +153,15 @@ export default function FactoryPage() {
     setError(null);
     setTestRunning(true);
     setTestOutput('');
+    setEvaluation(null);
     try {
       const res = await fetch(`${RUNTIME_URL}/test-run`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           systemPrompt: draft.prompt,
+          rules: draft.rules,
+          guidelines: draft.guidelines,
           modelProfileId: draft.modelProfileId,
           input: testInput,
         }),
@@ -140,7 +171,24 @@ export default function FactoryPage() {
         setTestOutput(null);
         return;
       }
-      await consumeTextStream(res, setTestOutput);
+      const output = await consumeTextStream(res, setTestOutput);
+      const evalRes = await fetch(`${RUNTIME_URL}/test-evaluate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          agentName: draft.name,
+          description: draft.description,
+          rules: draft.rules,
+          guidelines: draft.guidelines,
+          systemPrompt: draft.prompt,
+          evaluationCriteria: draft.evaluationCriteria,
+          input: testInput,
+          output,
+        }),
+      });
+      if (evalRes.ok) {
+        setEvaluation((await evalRes.json()) as PublishEvaluation);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : '试跑失败');
       setTestOutput(null);
@@ -151,6 +199,14 @@ export default function FactoryPage() {
 
   async function handleCreate() {
     if (!draft.name.trim() || !draft.prompt.trim()) return;
+    if (!testOutput || !evaluation) {
+      setError('请先完成试跑并获得发布判断后再创建 Agent');
+      return;
+    }
+    if (evaluation.status === 'blocked') {
+      setError('当前发布判断为暂不建议发布，请调整后重新试跑');
+      return;
+    }
     setError(null);
     const agent = await createAgent.mutateAsync({
       name: draft.name.trim(),
@@ -158,7 +214,11 @@ export default function FactoryPage() {
       status: 'published',
       dna: {
         prompt: draft.prompt,
+        rules: draft.rules,
+        guidelines: draft.guidelines,
         modelProfileId: draft.modelProfileId,
+        testCases: draft.testCases,
+        evaluationCriteria: draft.evaluationCriteria,
         skillIds: draft.skillIds,
         toolIds: draft.toolIds,
         knowledgeBaseIds: draft.knowledgeBaseIds,
@@ -174,6 +234,25 @@ export default function FactoryPage() {
     setDraft((d) => ({
       ...d,
       [key]: d[key].includes(id) ? d[key].filter((v) => v !== id) : [...d[key], id],
+    }));
+  }
+
+  function updateDraftTestCase(
+    index: number,
+    patch: Partial<{ name: string; input: string; expected: string }>,
+  ) {
+    setDraft((d) => ({
+      ...d,
+      testCases: d.testCases.map((testCase, i) =>
+        i === index ? { ...testCase, ...patch } : testCase,
+      ),
+    }));
+  }
+
+  function removeDraftTestCase(index: number) {
+    setDraft((d) => ({
+      ...d,
+      testCases: d.testCases.filter((_, i) => i !== index),
     }));
   }
 
@@ -354,6 +433,107 @@ export default function FactoryPage() {
                   onChange={(e) => setDraft((d) => ({ ...d, prompt: e.target.value }))}
                 />
               </Field>
+              <Field label="Rules（每行一条）">
+                <Textarea
+                  rows={4}
+                  value={draft.rules.join('\n')}
+                  placeholder="例如：只输出结构化分析，不改写原文。"
+                  onChange={(e) =>
+                    setDraft((d) => ({
+                      ...d,
+                      rules: e.target.value
+                        .split('\n')
+                        .map((v) => v.trim())
+                        .filter(Boolean),
+                    }))
+                  }
+                />
+              </Field>
+              <Field label="Guidelines（每行一条）">
+                <Textarea
+                  rows={4}
+                  value={draft.guidelines.join('\n')}
+                  placeholder="例如：始终使用简体中文。"
+                  onChange={(e) =>
+                    setDraft((d) => ({
+                      ...d,
+                      guidelines: e.target.value
+                        .split('\n')
+                        .map((v) => v.trim())
+                        .filter(Boolean),
+                    }))
+                  }
+                />
+              </Field>
+              <Field label="测试样例">
+                <div className="space-y-3">
+                  {draft.testCases.map((testCase, index) => (
+                    <div
+                      // biome-ignore lint/suspicious/noArrayIndexKey: 测试样例为本地草稿，可按顺序编辑
+                      key={index}
+                      className="space-y-2 rounded-md border border-neutral-200 p-3"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Input
+                          value={testCase.name}
+                          placeholder="样例名称"
+                          onChange={(e) => updateDraftTestCase(index, { name: e.target.value })}
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          onClick={() => removeDraftTestCase(index)}
+                        >
+                          删除
+                        </Button>
+                      </div>
+                      <Textarea
+                        rows={3}
+                        value={testCase.input}
+                        placeholder="输入：用户会真实提交的内容"
+                        onChange={(e) => updateDraftTestCase(index, { input: e.target.value })}
+                      />
+                      <Textarea
+                        rows={3}
+                        value={testCase.expected}
+                        placeholder="期望：可验证的输出结果"
+                        onChange={(e) => updateDraftTestCase(index, { expected: e.target.value })}
+                      />
+                    </div>
+                  ))}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() =>
+                      setDraft((d) => ({
+                        ...d,
+                        testCases: [
+                          ...d.testCases,
+                          { name: '手动测试样例', input: '', expected: '' },
+                        ],
+                      }))
+                    }
+                  >
+                    新增测试样例
+                  </Button>
+                </div>
+              </Field>
+              <Field label="发布判断标准（每行一条）">
+                <Textarea
+                  rows={4}
+                  value={draft.evaluationCriteria.join('\n')}
+                  placeholder="例如：输出结构稳定；不虚构事实；能处理缺失信息。"
+                  onChange={(e) =>
+                    setDraft((d) => ({
+                      ...d,
+                      evaluationCriteria: e.target.value
+                        .split('\n')
+                        .map((v) => v.trim())
+                        .filter(Boolean),
+                    }))
+                  }
+                />
+              </Field>
               <Field label="模型 Provider">
                 <select
                   className="h-9 w-full rounded-md border border-neutral-300 bg-white px-2 text-sm"
@@ -420,6 +600,13 @@ export default function FactoryPage() {
               <div className="mb-3 rounded-md bg-neutral-50 p-3 text-xs text-neutral-500">
                 <div className="font-medium text-neutral-700">{draft.name}</div>
                 <div className="mt-0.5">{draft.description || '（无描述）'}</div>
+                {draft.evaluationCriteria.length > 0 && (
+                  <ul className="mt-2 list-inside list-disc space-y-0.5">
+                    {draft.evaluationCriteria.map((criterion) => (
+                      <li key={criterion}>{criterion}</li>
+                    ))}
+                  </ul>
+                )}
               </div>
               <Field label="测试输入（试跑不落库）">
                 <Textarea
@@ -445,11 +632,48 @@ export default function FactoryPage() {
                   {testOutput || '生成中…'}
                 </pre>
               )}
+              {evaluation && (
+                <div
+                  className={cn(
+                    'mt-3 rounded-md border p-3 text-xs',
+                    evaluation.status === 'publishable'
+                      ? 'border-green-200 bg-green-50 text-green-700'
+                      : evaluation.status === 'blocked'
+                        ? 'border-red-200 bg-red-50 text-red-700'
+                        : 'border-amber-200 bg-amber-50 text-amber-700',
+                  )}
+                >
+                  <div className="font-medium">
+                    {evaluation.status === 'publishable'
+                      ? '可以发布'
+                      : evaluation.status === 'blocked'
+                        ? '暂不建议发布'
+                        : '建议调整后发布'}
+                  </div>
+                  <p className="mt-1">{evaluation.summary}</p>
+                  {(evaluation.reasons?.length ?? 0) > 0 && (
+                    <ul className="mt-2 list-inside list-disc space-y-0.5">
+                      {evaluation.reasons?.map((reason) => (
+                        <li key={reason}>{reason}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
               <div className="mt-4 flex justify-between">
                 <Button variant="outline" size="sm" onClick={() => setStep(2)}>
                   <ChevronLeft size={14} /> 上一步
                 </Button>
-                <Button size="sm" disabled={createAgent.isPending} onClick={handleCreate}>
+                <Button
+                  size="sm"
+                  disabled={
+                    createAgent.isPending ||
+                    !testOutput ||
+                    !evaluation ||
+                    evaluation.status === 'blocked'
+                  }
+                  onClick={handleCreate}
+                >
                   {createAgent.isPending ? '创建中…' : '创建 Agent'}
                 </Button>
               </div>

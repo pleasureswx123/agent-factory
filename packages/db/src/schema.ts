@@ -51,6 +51,14 @@ export type MemoryPolicy = {
   longTerm?: { enabled: boolean; scope: 'agent' | 'conversation' };
 };
 
+export type AgentRule = string;
+export type AgentGuideline = string;
+export type AgentTestCase = {
+  name: string;
+  input: string;
+  expected: string;
+};
+
 export type MessagePart =
   | { type: 'text'; text: string }
   | { type: 'tool-call'; toolCallId: string; toolName: string; args: unknown }
@@ -143,6 +151,13 @@ export const agentDnas = pgTable(
     modelProfileId: uuid('model_profile_id').references((): AnyPgColumn => resources.id, {
       onDelete: 'set null',
     }),
+    rules: jsonb('rules').$type<AgentRule[]>().notNull().default(sql`'[]'::jsonb`),
+    guidelines: jsonb('guidelines').$type<AgentGuideline[]>().notNull().default(sql`'[]'::jsonb`),
+    testCases: jsonb('test_cases').$type<AgentTestCase[]>().notNull().default(sql`'[]'::jsonb`),
+    evaluationCriteria: jsonb('evaluation_criteria')
+      .$type<string[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     skillIds: jsonb('skill_ids').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
     toolIds: jsonb('tool_ids').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
     knowledgeBaseIds: jsonb('knowledge_base_ids')

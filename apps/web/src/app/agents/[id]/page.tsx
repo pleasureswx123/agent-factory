@@ -9,10 +9,22 @@ import { useEffect, useState } from 'react';
 import { Badge, Button, Field, Input, Tabs, Textarea } from '@/components/ui';
 import { useWorkbenchStore } from '@/lib/store';
 import { trpc } from '@/lib/trpc';
-import { formatTime, providerOptionLabel } from '@/lib/utils';
+import { formatTime, providerOptionLabel, RUNTIME_URL, readRuntimeError } from '@/lib/utils';
+
+type EvolveSuggestion = {
+  summary: string;
+  promptSuggestions?: string[];
+  ruleSuggestions?: string[];
+  testCaseSuggestions?: { name: string; input: string; expected: string }[];
+  riskNotes?: string[];
+};
 
 type DnaState = {
+  rules: string[];
+  guidelines: string[];
   prompt: string;
+  testCases: { name: string; input: string; expected: string }[];
+  evaluationCriteria: string[];
   modelProfileId: string | null;
   skillIds: string[];
   toolIds: string[];
@@ -48,6 +60,9 @@ export default function AgentConfigPage() {
   const [dna, setDna] = useState<DnaState | null>(null);
   const [changeNote, setChangeNote] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
+  const [evolveSuggestion, setEvolveSuggestion] = useState<EvolveSuggestion | null>(null);
+  const [evolveLoading, setEvolveLoading] = useState(false);
+  const [evolveError, setEvolveError] = useState<string | null>(null);
 
   // 数据到达后初始化本地编辑态（仅一次）
   useEffect(() => {
@@ -56,6 +71,10 @@ export default function AgentConfigPage() {
     setDescription(data.agent.description ?? '');
     setDna({
       prompt: data.prompt?.content ?? '',
+      rules: data.dna?.rules ?? [],
+      guidelines: data.dna?.guidelines ?? [],
+      testCases: data.dna?.testCases ?? [],
+      evaluationCriteria: data.dna?.evaluationCriteria ?? [],
       modelProfileId: data.dna?.modelProfileId ?? null,
       skillIds: data.dna?.skillIds ?? [],
       toolIds: data.dna?.toolIds ?? [],
@@ -107,6 +126,32 @@ export default function AgentConfigPage() {
     updateDna.mutate({ agentId, dna, changeNote: note });
   }
 
+  async function generateEvolveSuggestion() {
+    const ok = window.confirm(
+      '生成改进建议会把该 Agent 的当前配置、最近会话和素材摘要发送给 Factory 默认模型进行分析。是否继续？',
+    );
+    if (!ok) return;
+    setEvolveLoading(true);
+    setEvolveError(null);
+    setEvolveSuggestion(null);
+    try {
+      const res = await fetch(`${RUNTIME_URL}/factory/evolve`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ agentId }),
+      });
+      if (!res.ok) {
+        setEvolveError(await readRuntimeError(res));
+        return;
+      }
+      setEvolveSuggestion((await res.json()) as EvolveSuggestion);
+    } catch (err) {
+      setEvolveError(err instanceof Error ? err.message : '生成改进建议失败');
+    } finally {
+      setEvolveLoading(false);
+    }
+  }
+
   if (isLoading || !data || !dna) {
     return <div className="p-8 text-sm text-neutral-400">加载中…</div>;
   }
@@ -122,6 +167,33 @@ export default function AgentConfigPage() {
         ? {
             ...d,
             [key]: d[key].includes(id) ? d[key].filter((v) => v !== id) : [...d[key], id],
+          }
+        : d,
+    );
+  }
+
+  function updateDnaTestCase(
+    index: number,
+    patch: Partial<{ name: string; input: string; expected: string }>,
+  ) {
+    setDna((d) =>
+      d
+        ? {
+            ...d,
+            testCases: d.testCases.map((testCase, i) =>
+              i === index ? { ...testCase, ...patch } : testCase,
+            ),
+          }
+        : d,
+    );
+  }
+
+  function removeDnaTestCase(index: number) {
+    setDna((d) =>
+      d
+        ? {
+            ...d,
+            testCases: d.testCases.filter((_, i) => i !== index),
           }
         : d,
     );
@@ -182,6 +254,104 @@ export default function AgentConfigPage() {
 
           {tab === 'prompt' && (
             <div>
+              <Field label="Rules（每行一条）">
+                <Textarea
+                  rows={4}
+                  value={dna.rules.join('\n')}
+                  onChange={(e) =>
+                    setDna({
+                      ...dna,
+                      rules: e.target.value
+                        .split('\n')
+                        .map((v) => v.trim())
+                        .filter(Boolean),
+                    })
+                  }
+                />
+              </Field>
+              <Field label="Guidelines（每行一条）">
+                <Textarea
+                  rows={4}
+                  value={dna.guidelines.join('\n')}
+                  onChange={(e) =>
+                    setDna({
+                      ...dna,
+                      guidelines: e.target.value
+                        .split('\n')
+                        .map((v) => v.trim())
+                        .filter(Boolean),
+                    })
+                  }
+                />
+              </Field>
+              <Field label="测试样例">
+                <div className="space-y-3">
+                  {dna.testCases.map((testCase, index) => (
+                    <div
+                      // biome-ignore lint/suspicious/noArrayIndexKey: 测试样例为本地配置草稿，可按顺序编辑
+                      key={index}
+                      className="space-y-2 rounded-md border border-neutral-200 p-3"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Input
+                          value={testCase.name}
+                          placeholder="样例名称"
+                          onChange={(e) => updateDnaTestCase(index, { name: e.target.value })}
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          onClick={() => removeDnaTestCase(index)}
+                        >
+                          删除
+                        </Button>
+                      </div>
+                      <Textarea
+                        rows={3}
+                        value={testCase.input}
+                        placeholder="输入：用户会真实提交的内容"
+                        onChange={(e) => updateDnaTestCase(index, { input: e.target.value })}
+                      />
+                      <Textarea
+                        rows={3}
+                        value={testCase.expected}
+                        placeholder="期望：可验证的输出结果"
+                        onChange={(e) => updateDnaTestCase(index, { expected: e.target.value })}
+                      />
+                    </div>
+                  ))}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() =>
+                      setDna({
+                        ...dna,
+                        testCases: [
+                          ...dna.testCases,
+                          { name: '手动测试样例', input: '', expected: '' },
+                        ],
+                      })
+                    }
+                  >
+                    新增测试样例
+                  </Button>
+                </div>
+              </Field>
+              <Field label="发布判断标准（每行一条）">
+                <Textarea
+                  rows={4}
+                  value={dna.evaluationCriteria.join('\n')}
+                  onChange={(e) =>
+                    setDna({
+                      ...dna,
+                      evaluationCriteria: e.target.value
+                        .split('\n')
+                        .map((v) => v.trim())
+                        .filter(Boolean),
+                    })
+                  }
+                />
+              </Field>
               <Field label="系统提示词（保存后生成新版本）">
                 <Textarea
                   rows={12}
@@ -203,6 +373,54 @@ export default function AgentConfigPage() {
               >
                 保存 Prompt
               </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="ml-2"
+                disabled={evolveLoading}
+                onClick={generateEvolveSuggestion}
+              >
+                {evolveLoading ? '分析中…' : '生成改进建议'}
+              </Button>
+
+              {evolveError && (
+                <div className="mt-3 rounded-md bg-red-50 px-3 py-2 text-xs text-red-600">
+                  {evolveError}
+                </div>
+              )}
+              {evolveSuggestion && (
+                <div className="mt-3 rounded-md border border-neutral-200 bg-neutral-50 p-3 text-xs">
+                  <div className="font-medium text-neutral-700">{evolveSuggestion.summary}</div>
+                  {[
+                    ['Prompt 建议', evolveSuggestion.promptSuggestions],
+                    ['Rules 建议', evolveSuggestion.ruleSuggestions],
+                    ['风险提示', evolveSuggestion.riskNotes],
+                  ].map(([label, values]) =>
+                    Array.isArray(values) && values.length > 0 ? (
+                      <div key={label as string} className="mt-2">
+                        <div className="font-medium text-neutral-600">{label as string}</div>
+                        <ul className="mt-1 list-inside list-disc space-y-0.5 text-neutral-500">
+                          {values.map((value) => (
+                            <li key={value}>{value}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null,
+                  )}
+                  {(evolveSuggestion.testCaseSuggestions?.length ?? 0) > 0 && (
+                    <div className="mt-2">
+                      <div className="font-medium text-neutral-600">测试样例建议</div>
+                      <ul className="mt-1 list-inside list-disc space-y-0.5 text-neutral-500">
+                        {evolveSuggestion.testCaseSuggestions?.map((testCase) => (
+                          <li key={testCase.name}>
+                            {testCase.name}：{testCase.input}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <h3 className="mt-6 mb-2 text-sm font-semibold">版本历史</h3>
               <ul className="space-y-2">

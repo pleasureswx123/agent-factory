@@ -3,4 +3,6 @@
 
 export * from './chat';
 export * from './constants';
+export * from './factory-dna';
+export * from './recommendations';
 export * from './schemas';
