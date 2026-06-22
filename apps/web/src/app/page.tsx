@@ -14,9 +14,9 @@ export default function HomePage() {
   const agent = agents.find((a) => a.id === currentAgentId) ?? agents[0];
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full min-h-0 bg-neutral-50">
       {!agent ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-neutral-400">
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-white text-neutral-400">
           <Bot size={40} strokeWidth={1.5} />
           {isLoading ? (
             <p className="text-sm">加载中…</p>
@@ -34,7 +34,7 @@ export default function HomePage() {
         </div>
       ) : (
         <>
-          <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-white">
             <header className="flex items-center gap-2 border-b border-neutral-200 bg-white px-6 py-3">
               <Bot size={18} className="text-neutral-500" />
               <h1 className="text-sm font-semibold">{agent.name}</h1>

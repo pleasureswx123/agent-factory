@@ -113,7 +113,12 @@ export async function generateVideo(profile: ModelProfile, prompt: string): Prom
 /** 将生成文件回传 web /api/upload：落盘 data/uploads 并登记为 artifact */
 export async function saveGeneratedFile(
   file: GeneratedFile,
-  opts: { name: string; agentId?: string | null; conversationId?: string | null },
+  opts: {
+    name: string;
+    agentId?: string | null;
+    conversationId?: string | null;
+    content?: string | null;
+  },
 ): Promise<{ id: string; name: string; fileUrl: string | null }> {
   const fd = new FormData();
   fd.append(
@@ -123,6 +128,7 @@ export async function saveGeneratedFile(
   );
   if (opts.agentId) fd.append('agentId', opts.agentId);
   if (opts.conversationId) fd.append('conversationId', opts.conversationId);
+  if (opts.content) fd.append('content', opts.content);
   const res = await fetch(`${WEB_URL}/api/upload`, { method: 'POST', body: fd });
   if (!res.ok) throw new Error('生成文件保存为素材失败，请确认 web 服务已启动');
   return (await res.json()) as { id: string; name: string; fileUrl: string | null };

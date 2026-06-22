@@ -218,6 +218,7 @@ export const messages = pgTable(
 );
 
 // ===== Artifacts =====
+// 素材资产可脱离 Agent / 会话继续存在：删除 Agent、会话或从素材库移除时只断开来源关系。
 
 export const artifacts = pgTable(
   'artifacts',

@@ -13,7 +13,7 @@ import {
 } from '@agent-os/db';
 import { chatRequestSchema } from '@agent-os/shared';
 import { type ModelMessage, streamText } from 'ai';
-import { asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray } from 'drizzle-orm';
 import type { Context } from 'hono';
 import { generateImage, generateVideo, saveGeneratedFile } from '../media';
 import { buildLanguageModel, resolveProviderProfile } from '../provider';
@@ -51,7 +51,7 @@ async function artifactContext(db: Db, ids: string[]): Promise<string> {
 export async function handleChat(c: Context, db: Db) {
   const parsed = chatRequestSchema.safeParse(await c.req.json());
   if (!parsed.success) return c.json({ error: '请求参数不合法' }, 400);
-  const { conversationId, text, artifactIds } = parsed.data;
+  const { conversationId, text, artifactIds, clientRequestId, replaceMessageId } = parsed.data;
 
   const [conversation] = await db
     .select()
@@ -98,19 +98,62 @@ export async function handleChat(c: Context, db: Db) {
 
   const refContext = await artifactContext(db, artifactIds);
 
-  // 落库：用户消息（显式 id，便于文本分支查历史时排除当前消息）
-  const userMessageId = randomUUID();
+  // 落库：用户消息。编辑重发时复用原消息 id，并清掉该轮之后的旧回复/后续消息。
+  const userMessageId = replaceMessageId ?? clientRequestId ?? randomUUID();
   const userContent: MessageContent = [
     { type: 'text', text },
     ...artifactIds.map((id) => ({ type: 'artifact-ref' as const, artifactId: id })),
   ];
-  await db.insert(messages).values({
-    id: userMessageId,
-    conversationId,
-    role: 'user',
-    content: userContent,
-    artifactRefs: artifactIds,
-  });
+
+  if (replaceMessageId) {
+    const replacedAt = new Date();
+    const [targetMessage] = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.id, replaceMessageId), eq(messages.conversationId, conversationId)))
+      .limit(1);
+    if (targetMessage?.role !== 'user') {
+      return c.json({ error: '只能编辑当前会话中的用户消息' }, 400);
+    }
+
+    const staleMessages = await db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.conversationId, conversationId),
+          gt(messages.createdAt, targetMessage.createdAt),
+        ),
+      );
+    const staleIds = staleMessages.map((m) => m.id);
+    if (staleIds.length > 0) {
+      await db
+        .update(artifacts)
+        .set({ conversationId: null, messageId: null })
+        .where(inArray(artifacts.messageId, staleIds));
+      await db.delete(messages).where(inArray(messages.id, staleIds));
+    }
+
+    await db
+      .update(messages)
+      .set({ content: userContent, artifactRefs: artifactIds, createdAt: replacedAt })
+      .where(eq(messages.id, replaceMessageId));
+  } else {
+    const [insertedUserMessage] = await db
+      .insert(messages)
+      .values({
+        id: userMessageId,
+        conversationId,
+        role: 'user',
+        content: userContent,
+        artifactRefs: artifactIds,
+      })
+      .onConflictDoNothing()
+      .returning({ id: messages.id });
+    if (!insertedUserMessage) {
+      return c.text('', 200, { 'x-duplicate-request': '1' });
+    }
+  }
 
   // 会话标题：首条消息自动命名 + 更新时间
   await db
@@ -135,6 +178,7 @@ export async function handleChat(c: Context, db: Db) {
         name: `${agent.name}-${profile.modality === 'image' ? '图片' : '视频'}-${Date.now()}`,
         agentId: conversation.agentId,
         conversationId,
+        content: text,
       });
       const note =
         profile.modality === 'image'
@@ -150,6 +194,10 @@ export async function handleChat(c: Context, db: Db) {
         ],
         artifactRefs: [saved.id],
       });
+      await db
+        .update(artifacts)
+        .set({ messageId: assistantMessageId })
+        .where(eq(artifacts.id, saved.id));
       return c.text(note, 200, { 'x-message-id': assistantMessageId });
     } catch (err) {
       return c.json(

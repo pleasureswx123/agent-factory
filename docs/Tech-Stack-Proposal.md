@@ -149,7 +149,9 @@ audit_logs           ← 资源 / Agent 变更审计
 | API Key 不明文 | AES-256-GCM + 本地主密钥；UI 只显 `sk-****1234` |
 | 知识库不进 MVP | 表结构预留 `knowledge_base_id`，UI tab 留"敬请期待" |
 | 折叠 / 列表 / 缩略图 | Zustand persist 用户偏好 |
-| 删除 Agent 软删 | `deleted_at` + `sourceAgentDeleted` 标记到 artifact |
+| 删除 Agent 软删 | `agents.deleted_at` 标记 Agent；删除会话上下文；已保存素材保留，`artifacts.agent_id` / `conversation_id` / `message_id` 置空并标记 `sourceAgentDeleted` |
+| 删除会话 | 删除 conversation / message；已保存素材保留，`artifacts.conversation_id` / `message_id` 置空 |
+| 删除素材 | 仅从素材资产库移除，`artifacts.agent_id` 置空；不删除历史会话消息和消息中的生成结果 |
 
 ## 9. 已确认决策
 

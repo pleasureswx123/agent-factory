@@ -26,6 +26,7 @@ export async function POST(req: Request) {
   }
   const agentId = (form.get('agentId') as string | null) || null;
   const conversationId = (form.get('conversationId') as string | null) || null;
+  const sourceContent = (form.get('content') as string | null) || null;
 
   const mime = file.type || 'application/octet-stream';
   const type = detectType(mime);
@@ -37,6 +38,7 @@ export async function POST(req: Request) {
   if (type === 'text' || type === 'json') {
     content = buffer.toString('utf-8');
   } else {
+    content = sourceContent;
     await mkdir(UPLOAD_DIR, { recursive: true });
     const safeName = `${randomUUID()}-${file.name.replace(/[^\w.\-\u4e00-\u9fa5]/g, '_')}`;
     await writeFile(path.join(UPLOAD_DIR, safeName), buffer);

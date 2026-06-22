@@ -8,11 +8,11 @@ import {
   recommendAgentResourceIds,
   stripSuggestionBlocks,
 } from '@agent-os/shared';
-import { Bot, ChevronLeft, Play, Send, Sparkles } from 'lucide-react';
+import { Bot, ChevronLeft, Play, Plus, Send, Sparkles } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useRef, useState } from 'react';
-import { Badge, Button, Field, Input, Textarea } from '@/components/ui';
-import { useWorkbenchStore } from '@/lib/store';
+import { type PointerEvent as ReactPointerEvent, useRef, useState } from 'react';
+import { Badge, Button, Field, Input, Select, Textarea } from '@/components/ui';
+import { DEFAULT_FACTORY_PANEL_WIDTH, useWorkbenchStore } from '@/lib/store';
 import { trpc } from '@/lib/trpc';
 import {
   cn,
@@ -58,11 +58,24 @@ const EMPTY_DRAFT: DnaDraft = {
   knowledgeBaseIds: [],
 };
 
-const STEPS = ['需求澄清', '选择候选', '配置 DNA', '测试创建'] as const;
+const STEPS = ['需求澄清', '选择候选', '配置 DNA', '测试发布'] as const;
+const MIN_FACTORY_PANEL_WIDTH = 360;
+const MAX_FACTORY_PANEL_WIDTH = 720;
+
+function clampFactoryPanelWidth(width: number) {
+  const viewportMax =
+    typeof window === 'undefined'
+      ? MAX_FACTORY_PANEL_WIDTH
+      : Math.max(
+          MIN_FACTORY_PANEL_WIDTH,
+          Math.min(MAX_FACTORY_PANEL_WIDTH, window.innerWidth - 560),
+        );
+  return Math.min(Math.max(width, MIN_FACTORY_PANEL_WIDTH), viewportMax);
+}
 
 export default function FactoryPage() {
   const router = useRouter();
-  const { setCurrentAgent } = useWorkbenchStore();
+  const { factoryPanelWidth, setCurrentAgent, setFactoryPanelWidth } = useWorkbenchStore();
   const utils = trpc.useUtils();
 
   const { data: resourceList = [] } = trpc.resource.list.useQuery({});
@@ -93,6 +106,34 @@ export default function FactoryPage() {
   const [testOutput, setTestOutput] = useState<string | null>(null);
   const [evaluation, setEvaluation] = useState<PublishEvaluation | null>(null);
   const [testRunning, setTestRunning] = useState(false);
+  const composerExpanded = input.includes('\n');
+  const resizeStartRef = useRef<{ pointerX: number; width: number } | null>(null);
+  const panelWidth = clampFactoryPanelWidth(factoryPanelWidth || DEFAULT_FACTORY_PANEL_WIDTH);
+
+  function handleResizePointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    resizeStartRef.current = { pointerX: event.clientX, width: panelWidth };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    function handlePointerMove(moveEvent: PointerEvent) {
+      const start = resizeStartRef.current;
+      if (!start) return;
+      setFactoryPanelWidth(
+        clampFactoryPanelWidth(start.width + start.pointerX - moveEvent.clientX),
+      );
+    }
+
+    function handlePointerUp() {
+      resizeStartRef.current = null;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('pointermove', handlePointerMove);
+    }
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp, { once: true });
+  }
 
   async function sendFactoryChat() {
     const text = input.trim();
@@ -149,7 +190,7 @@ export default function FactoryPage() {
   }
 
   async function runTest() {
-    if (!draft.prompt.trim() || !draft.modelProfileId || !testInput.trim() || testRunning) return;
+    if (!draft.prompt.trim() || !testInput.trim() || testRunning) return;
     setError(null);
     setTestRunning(true);
     setTestOutput('');
@@ -257,9 +298,9 @@ export default function FactoryPage() {
   }
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full bg-neutral-50">
       {/* 左侧：需求澄清对话 */}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col bg-white">
         <header className="flex items-center gap-2 border-b border-neutral-200 bg-white px-6 py-3">
           <Sparkles size={18} className="text-neutral-500" />
           <h1 className="text-sm font-semibold">Agent Factory</h1>
@@ -308,34 +349,80 @@ export default function FactoryPage() {
           </div>
         )}
 
-        <div className="border-t border-neutral-200 bg-white px-6 py-3">
-          <div className="mx-auto flex max-w-2xl items-end gap-2">
-            <Textarea
-              rows={1}
-              value={input}
-              placeholder="描述你的业务需求，Enter 发送"
-              className="max-h-32 min-h-9 resize-none"
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                  e.preventDefault();
-                  sendFactoryChat();
-                }
-              }}
-            />
-            <Button
-              className="h-9 shrink-0"
-              disabled={streaming !== null || !input.trim()}
-              onClick={sendFactoryChat}
+        <div className="bg-white px-6 pb-4 pt-2">
+          <div className="mx-auto max-w-2xl">
+            <div
+              className={cn(
+                'grid grid-cols-[auto_minmax(0,1fr)_auto] items-end gap-2 rounded-[28px] border border-neutral-200 bg-white shadow-sm transition-[padding,box-shadow,border-color] duration-200 focus-within:border-neutral-300 focus-within:shadow-md',
+                composerExpanded ? 'grid-rows-[auto_auto] px-5 py-3' : 'grid-rows-[auto] px-3 py-2',
+              )}
             >
-              <Send size={15} /> 发送
-            </Button>
+              <button
+                type="button"
+                className={cn(
+                  'flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-neutral-700 hover:bg-neutral-100 hover:text-neutral-950 focus-visible:outline focus-visible:outline-2 focus-visible:outline-neutral-400',
+                  composerExpanded ? 'col-start-1 row-start-2' : 'col-start-1 row-start-1',
+                )}
+                title="补充需求上下文"
+              >
+                <Plus size={22} strokeWidth={1.8} />
+              </button>
+              <Textarea
+                rows={1}
+                value={input}
+                placeholder="描述你的业务需求"
+                className={cn(
+                  'resize-none overflow-y-hidden border-0 bg-transparent px-0 text-base shadow-none focus:border-transparent focus:outline-none',
+                  composerExpanded
+                    ? 'col-span-3 col-start-1 row-start-1 min-h-16 py-0'
+                    : 'col-start-2 row-start-1 min-h-10 py-2.5',
+                )}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (
+                    e.key === 'Enter' &&
+                    !e.shiftKey &&
+                    !e.ctrlKey &&
+                    !e.metaKey &&
+                    !e.nativeEvent.isComposing
+                  ) {
+                    e.preventDefault();
+                    sendFactoryChat();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className={cn(
+                  'flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-white transition-colors hover:bg-neutral-700 disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-400',
+                  composerExpanded ? 'col-start-3 row-start-2' : 'col-start-3 row-start-1',
+                )}
+                disabled={streaming !== null || !input.trim()}
+                onClick={sendFactoryChat}
+                title="发送"
+                aria-label="发送"
+              >
+                <Send size={16} />
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
       {/* 右侧：四步创建流程 */}
-      <div className="flex w-[440px] shrink-0 flex-col border-l border-neutral-200 bg-white">
+      <div
+        className="relative flex shrink-0 flex-col border-l border-neutral-200 bg-neutral-50"
+        style={{ width: panelWidth }}
+      >
+        <button
+          type="button"
+          aria-label="调整 Factory 右侧流程栏宽度"
+          title="拖拽调整右侧流程栏宽度"
+          onPointerDown={handleResizePointerDown}
+          className="group absolute left-0 top-0 z-20 h-full w-2 -translate-x-1 cursor-col-resize touch-none"
+        >
+          <span className="block h-full w-px bg-transparent transition-colors group-hover:bg-neutral-300 group-active:bg-neutral-400" />
+        </button>
         <div className="flex items-center gap-1 border-b border-neutral-200 px-4 py-3">
           {STEPS.map((label, i) => (
             <div key={label} className="flex items-center gap-1">
@@ -535,8 +622,7 @@ export default function FactoryPage() {
                 />
               </Field>
               <Field label="模型 Provider">
-                <select
-                  className="h-9 w-full rounded-md border border-neutral-300 bg-white px-2 text-sm"
+                <Select
                   value={draft.modelProfileId ?? ''}
                   onChange={(e) =>
                     setDraft((d) => ({ ...d, modelProfileId: e.target.value || null }))
@@ -548,7 +634,7 @@ export default function FactoryPage() {
                       {providerOptionLabel(p)}
                     </option>
                   ))}
-                </select>
+                </Select>
                 {providers.length === 0 && (
                   <p className="mt-1 text-xs text-amber-600">
                     暂无 Provider，请先到「资源与凭证」添加模型配置
@@ -619,13 +705,15 @@ export default function FactoryPage() {
               <Button
                 variant="outline"
                 size="sm"
-                disabled={testRunning || !testInput.trim() || !draft.modelProfileId}
+                disabled={testRunning || !testInput.trim() || !draft.prompt.trim()}
                 onClick={runTest}
               >
                 <Play size={13} /> 试跑
               </Button>
               {!draft.modelProfileId && (
-                <p className="mt-1 text-xs text-amber-600">试跑需要先在上一步绑定模型 Provider</p>
+                <p className="mt-1 text-xs text-neutral-400">
+                  未绑定模型 Provider 时将使用资源中心的默认模型。
+                </p>
               )}
               {testOutput !== null && (
                 <pre className="mt-3 max-h-60 overflow-auto whitespace-pre-wrap rounded-md bg-neutral-50 p-3 text-xs">
@@ -674,7 +762,7 @@ export default function FactoryPage() {
                   }
                   onClick={handleCreate}
                 >
-                  {createAgent.isPending ? '创建中…' : '创建 Agent'}
+                  {createAgent.isPending ? '发布中…' : '发布 Agent'}
                 </Button>
               </div>
             </div>

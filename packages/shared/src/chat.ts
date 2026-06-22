@@ -6,6 +6,8 @@ export const chatRequestSchema = z.object({
   conversationId: z.string().uuid(),
   text: z.string().min(1),
   artifactIds: z.array(z.string().uuid()).default([]),
+  clientRequestId: z.string().uuid().optional(),
+  replaceMessageId: z.string().uuid().optional(),
 });
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 
@@ -25,7 +27,7 @@ export const testRunSchema = z.object({
   systemPrompt: z.string().min(1),
   rules: z.array(z.string().min(1)).default([]),
   guidelines: z.array(z.string().min(1)).default([]),
-  modelProfileId: z.string().uuid(),
+  modelProfileId: z.string().uuid().nullable().optional(),
   input: z.string().min(1),
 });
 export type TestRunRequest = z.infer<typeof testRunSchema>;

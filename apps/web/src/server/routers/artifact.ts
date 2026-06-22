@@ -79,10 +79,14 @@ export const artifactRouter = router({
       return updated;
     }),
 
+  /** 从素材资产库移除：保留 artifact 记录和历史会话消息，只断开当前 Agent 归属 */
   delete: publicProcedure
     .input(z.object({ artifactId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      await ctx.db.delete(artifacts).where(eq(artifacts.id, input.artifactId));
+      await ctx.db
+        .update(artifacts)
+        .set({ agentId: null })
+        .where(eq(artifacts.id, input.artifactId));
       return { ok: true };
     }),
 });

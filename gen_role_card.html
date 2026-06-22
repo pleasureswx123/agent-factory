@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>角色设定卡提示词生成器</title>
+    <style>
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #f4f4f9; padding: 20px; display: flex; justify-content: center; }
+        .container { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 5px 20px rgba(0,0,0,0.1); width: 100%; max-width: 600px; }
+        h2 { text-align: center; color: #333; margin-bottom: 20px; }
+        .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+        input, select { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; }
+        .checkbox-row { margin: 10px 0; display: flex; align-items: center; gap: 10px; }
+        textarea { width: 100%; height: 350px; margin-top: 15px; padding: 10px; border: 1px solid #ccc; border-radius: 5px; background: #f9f9f9; resize: none; font-size: 13px; line-height: 1.5; }
+        button { width: 100%; padding: 12px; margin-top: 10px; border: none; border-radius: 5px; cursor: pointer; color: white; font-weight: bold; }
+        .btn-gen { background: #5a67d8; }
+        .btn-copy { background: #48bb78; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>角色设定卡提示词生成器</h2>
+
+    <div class="row">
+        <input type="text" id="name" placeholder="角色名称">
+        <input type="text" id="job" placeholder="职业">
+    </div>
+    <div class="row">
+        <input type="number" id="age" placeholder="年龄">
+        <select id="style">
+            <option value="写实真人风格">写实真人风格</option>
+            <option value="仙侠古风">仙侠古风</option>
+            <option value="国漫3D风格">国漫3D风格</option>
+            <option value="日漫二次元风格">日漫二次元风格</option>
+            <option value="水墨写意风格">水墨写意风格</option>
+            <option value="未来科幻风格">未来科幻风格</option>
+            <option value="3D卡通渲染">3D卡通渲染</option>
+            <option value="赛博朋克风格">赛博朋克风格</option>
+            <option value="简笔线条画风">简笔线条画风</option>
+        </select>
+    </div>
+    <input type="text" id="personality" placeholder="性格特点" style="width:100%; margin-bottom:10px; padding:10px; border:1px solid #ccc; border-radius:5px; box-sizing:border-box;">
+
+    <div class="checkbox-row">
+        <input type="checkbox" id="includeSkills" checked style="width: auto;">
+        <label for="includeSkills">包含技能信息与战斗服装布局</label>
+    </div>
+
+    <button type="button" class="btn-gen" onclick="generate()">生成提示词</button>
+    <textarea id="output" readonly></textarea>
+    <button type="button" class="btn-copy" onclick="copy()">复制提示词</button>
+</div>
+
+<script>
+    function generate() {
+        const n = document.getElementById('name').value || "未知角色";
+        const j = document.getElementById('job').value || "职业";
+        const a = document.getElementById('age').value || "年龄";
+        const s = document.getElementById('style').value;
+        const p = document.getElementById('personality').value || "性格特点";
+        const includeSkills = document.getElementById('includeSkills').checked;
+
+        let prompt = `【角色基本信息】
+名称：${n} | 职业：${j} | 年龄：${a} | 性格：${p}
+
+【画面构图与视觉标准】
+视觉风格：${s}，顶级电影/游戏角色设定集质感。
+底色要求：纯白色背景（Pure white background），严禁任何纹理、渐变或杂色。
+文字与排版：黑色文字（Black text），黑色极简线条边框，专业且严谨的UI排版。
+
+【版面布局细则】：
+1. 顶部：角色名及简介，使用清晰的黑色字体。
+2. 中心：左侧大型角色面部精细特写，右侧包含全身正面及背面图。`;
+
+        if (includeSkills) {
+            prompt += `
+3. 展示区：横向并排显示3套不同场景下的服装（含战斗服装），右侧为6个经典表情的头像宫格，下方配有1个习惯性动作的特写区域。
+4. 技能区：底部横排展示4个技能板块：3个核心技能图标及文字描述，1个醒目的终极技能（大招）特效展示区。`;
+        } else {
+            prompt += `
+3. 展示区：横向并排显示3套不同场景下的常服，右侧为6个经典表情的头像宫格，下方配有1个习惯性动作的特写区域。`;
+        }
+
+        prompt += `
+
+【视觉强化】：
+高对比度，角色五官精致，皮肤纹理真实，布料与材质清晰。确保所有版面元素均在纯白色底板上，文字与边框均为纯黑色，具有现代设计感，排版对称美观。
+
+【负向提示词】：
+彩色背景，灰色背景，背景有花纹，模糊，色彩混杂，文字模糊，解剖错误，多余肢体，画质粗糙，滤镜过重，背景色非纯白，文字颜色非黑，杂乱的背景装饰，拼贴感，手部畸形，低分辨率。`;
+
+        document.getElementById('output').value = prompt;
+    }
+
+    // biome-ignore lint/correctness/noUnusedVariables: called by inline button handler.
+    async function copy() {
+        const output = document.getElementById("output");
+        if (!output.value) {
+            alert("请先点击“生成提示词”！");
+            return;
+        }
+        try {
+            await navigator.clipboard.writeText(output.value);
+            alert("提示词已成功复制到剪贴板！");
+        } catch {
+            // 如果剪贴板API失败，则回退到传统选中方式
+            output.select();
+            document.execCommand("copy");
+            alert("已通过兼容模式复制。");
+        }
+    }
+
+    // 页面加载时自动生成一次，方便查看
+    window.onload = generate;
+</script>
+
+</body>
+</html>

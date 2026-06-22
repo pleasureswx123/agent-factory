@@ -4,7 +4,7 @@
 import { MODEL_MODALITY_LABELS, type ModelModality, RESOURCE_TYPE_LABELS } from '@agent-os/shared';
 import { ChevronDown, KeyRound, Pencil, Plus } from 'lucide-react';
 import { useState } from 'react';
-import { Badge, Button, Dialog, Field, Input } from '@/components/ui';
+import { Badge, Button, Dialog, Field, Input, Select } from '@/components/ui';
 import { trpc } from '@/lib/trpc';
 import { cn, formatTime } from '@/lib/utils';
 
@@ -385,17 +385,13 @@ export default function ResourcesPage() {
       {/* 新增资源对话框 */}
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} title="新增资源">
         <Field label="资源类型">
-          <select
-            className="h-9 w-full rounded-md border border-neutral-300 bg-white px-2 text-sm"
-            value={formType}
-            onChange={(e) => setFormType(e.target.value as ResourceType)}
-          >
+          <Select value={formType} onChange={(e) => setFormType(e.target.value as ResourceType)}>
             {TYPE_ORDER.map((t) => (
               <option key={t} value={t}>
                 {RESOURCE_TYPE_LABELS[t]}
               </option>
             ))}
-          </select>
+          </Select>
         </Field>
         <Field label={formType === 'provider' ? '名称（可从预设选择或自行输入）' : '名称'}>
           {formType === 'provider' ? (
@@ -483,8 +479,7 @@ export default function ResourcesPage() {
               />
             </Field>
             <Field label="模型能力">
-              <select
-                className="h-9 w-full rounded-md border border-neutral-300 bg-white px-2 text-sm"
+              <Select
                 value={formModality}
                 onChange={(e) => setFormModality(e.target.value as ModelModality)}
               >
@@ -493,7 +488,7 @@ export default function ResourcesPage() {
                     {MODEL_MODALITY_LABELS[m]}
                   </option>
                 ))}
-              </select>
+              </Select>
             </Field>
           </>
         )}
@@ -539,8 +534,7 @@ export default function ResourcesPage() {
               <Input value={editModelId} onChange={(e) => setEditModelId(e.target.value)} />
             </Field>
             <Field label="模型能力">
-              <select
-                className="h-9 w-full rounded-md border border-neutral-300 bg-white px-2 text-sm"
+              <Select
                 value={editModality}
                 onChange={(e) => setEditModality(e.target.value as ModelModality)}
               >
@@ -549,7 +543,7 @@ export default function ResourcesPage() {
                     {MODEL_MODALITY_LABELS[m]}
                   </option>
                 ))}
-              </select>
+              </Select>
             </Field>
           </>
         )}

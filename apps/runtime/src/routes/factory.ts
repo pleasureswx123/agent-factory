@@ -95,7 +95,7 @@ export async function handleTestRun(c: Context, db: Db) {
 
   let model: Awaited<ReturnType<typeof resolveModel>>;
   try {
-    model = await resolveModel(db, modelProfileId);
+    model = modelProfileId ? await resolveModel(db, modelProfileId) : await resolveDefaultModel(db);
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : '模型解析失败' }, 400);
   }

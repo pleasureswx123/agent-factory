@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
-import { evaluateTestRunSchema, evolveAgentSchema, parseAgentSuggestions } from './chat';
+import {
+  evaluateTestRunSchema,
+  evolveAgentSchema,
+  parseAgentSuggestions,
+  testRunSchema,
+} from './chat';
 import { dnaConfigSchema } from './schemas';
 
 const parsed = dnaConfigSchema.parse({
@@ -56,6 +61,22 @@ const evaluationRequest = evaluateTestRunSchema.parse({
 });
 
 assert.equal(evaluationRequest.evaluationCriteria[0], '完成结构化拆解');
+
+const defaultModelTestRun = evaluateTestRunSchema.parse({
+  agentName: '默认模型 Agent',
+  systemPrompt: '你是一个默认模型测试 Agent。',
+  input: '测试输入',
+  output: '测试输出',
+});
+
+assert.equal(defaultModelTestRun.description, '');
+
+const testRunWithDefaultModel = testRunSchema.parse({
+  systemPrompt: '你是一个默认模型测试 Agent。',
+  input: '测试输入',
+});
+
+assert.equal(testRunWithDefaultModel.modelProfileId, undefined);
 
 const evolveRequest = evolveAgentSchema.parse({
   agentId: '11111111-1111-1111-1111-111111111111',

@@ -1,4 +1,4 @@
-import { conversations, messages } from '@agent-os/db';
+import { artifacts, conversations, messages } from '@agent-os/db';
 import {
   createConversationSchema,
   DEFAULT_USER_ID,
@@ -43,9 +43,14 @@ export const conversationRouter = router({
     return updated;
   }),
 
+  /** 删除会话上下文；已保存素材保留，只清空来源会话和来源消息 */
   delete: publicProcedure
     .input(z.object({ conversationId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
+      await ctx.db
+        .update(artifacts)
+        .set({ conversationId: null, messageId: null })
+        .where(eq(artifacts.conversationId, input.conversationId));
       await ctx.db.delete(conversations).where(eq(conversations.id, input.conversationId));
       return { ok: true };
     }),

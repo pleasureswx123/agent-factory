@@ -1,11 +1,13 @@
 'use client';
 
 // 轻量 UI 基础组件（shadcn 风格，hand-rolled，无 radix 依赖）
-import { X } from 'lucide-react';
+import { ChevronDown, X } from 'lucide-react';
 import type {
   ButtonHTMLAttributes,
   InputHTMLAttributes,
   ReactNode,
+  Ref,
+  SelectHTMLAttributes,
   TextareaHTMLAttributes,
 } from 'react';
 import { cn } from '@/lib/utils';
@@ -50,9 +52,38 @@ export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElem
   );
 }
 
-export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+export function Select({ className, children, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <div className="relative">
+      <select
+        className={cn(
+          'h-9 w-full appearance-none rounded-md border border-neutral-300 bg-white py-0 pl-3 pr-9 text-sm',
+          'text-neutral-900 shadow-sm outline-none transition-colors',
+          'focus:border-neutral-500 focus:ring-2 focus:ring-neutral-200',
+          'disabled:cursor-not-allowed disabled:bg-neutral-50 disabled:text-neutral-400',
+          className,
+        )}
+        {...props}
+      >
+        {children}
+      </select>
+      <ChevronDown
+        size={16}
+        aria-hidden="true"
+        className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400"
+      />
+    </div>
+  );
+}
+
+export function Textarea({
+  className,
+  ref,
+  ...props
+}: TextareaHTMLAttributes<HTMLTextAreaElement> & { ref?: Ref<HTMLTextAreaElement> }) {
   return (
     <textarea
+      ref={ref}
       className={cn(
         'w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm',
         'placeholder:text-neutral-400 focus:border-neutral-500 focus:outline-none',
