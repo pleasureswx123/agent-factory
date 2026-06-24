@@ -1,6 +1,18 @@
 # Agent Factory / AgentOS Single Agent MVP
 
-Agent Factory 是 AgentOS 的本地单用户 MVP。当前版本聚焦单 Agent 的完整闭环：通过 Agent Factory 创建 Agent，配置 AgentDNA，在单 Agent 工作台中对话测试，将满意输出保存为素材，并在后续对话中引用素材继续生成。
+Agent Factory 是为了未来建设 **AI 视频生产工作台** 先做的一版初步设想和技术验证。它不是最终的视频生产平台本体，而是先验证“用 AI Agent 承接创作意图、沉淀可复用能力、管理模型与素材资产、形成可持续迭代的创作闭环”这件事是否可行。
+
+当前版本可以理解为 AI Director / Video Production Agent 工作台的前置 MVP：先从单 Agent 生命周期切入，让用户能够创建 Agent、配置 AgentDNA、绑定模型 Provider、进行对话测试、保存输出素材，并在后续对话中引用素材继续生成。后续真正的 AI 视频生产工作台会在这个基础上继续扩展到项目、剧本、分镜、角色/场景参考、图像/视频生成、质检评估和生产资产管理等完整视频生产流程。
+
+## 项目定位
+
+这个项目当前承担三件事：
+
+1. 验证 Agent Factory 是否能把用户的创作需求转成可运行、可测试、可迭代的 AI Agent。
+2. 验证 AI Director Agent 的基础工作方式：理解需求、组织 Prompt / DNA / 工具 / 模型配置，并产出可复用内容。
+3. 为未来 AI 视频生产工作台打底：先把 Agent、模型 Provider、素材资产、会话上下文和配置管理这些基础能力跑通，再逐步接入视频生产链路。
+
+当前不把它定位为完整剪辑软件、完整文生视频平台或最终版多 Agent 视频工厂。它是面向未来 AI 视频生产工作台的一版基础原型和工程起点。
 
 ## 项目结构
 
@@ -106,6 +118,82 @@ PORT=4001
 ```
 
 ## 启动完整服务
+
+### 本地启动速查（推荐）
+
+在 Windows PowerShell 中从仓库根目录执行：
+
+```powershell
+cd D:\work\laputta\agent-factory
+
+# 1. 确保依赖已安装
+pnpm install
+
+# 2. 启动本地 PostgreSQL（只绑定 127.0.0.1:5432）
+docker compose up -d
+
+# 3. 同步数据库结构并写入默认用户/内置资源
+pnpm db:push
+pnpm db:seed
+
+# 4. 启动 Web 与 Runtime
+pnpm dev
+```
+
+启动成功后访问：
+
+- Web 工作台：`http://127.0.0.1:3000`
+- Runtime 健康检查：`http://127.0.0.1:4001/health`
+- PostgreSQL：`127.0.0.1:5432`，数据库 `agentos`
+
+如果希望像 Codex 当前会话这样后台启动，可使用：
+
+```powershell
+Start-Process -FilePath "powershell" -ArgumentList @(
+  "-NoProfile",
+  "-ExecutionPolicy",
+  "Bypass",
+  "-Command",
+  "cd D:\work\laputta\agent-factory; pnpm dev *> .local-dev.out.log"
+) -WindowStyle Hidden
+```
+
+后台启动后可用下面的命令确认状态：
+
+```powershell
+Get-NetTCPConnection -State Listen | Where-Object { $_.LocalPort -in 3000,4001,5432 }
+Invoke-WebRequest http://127.0.0.1:3000/ -UseBasicParsing
+Invoke-WebRequest http://127.0.0.1:4001/health -UseBasicParsing
+Get-Content .local-dev.out.log -Tail 80
+```
+
+### 本地重启与端口占用处理
+
+如果 `3000` 或 `4001` 已被旧的本项目进程占用，先只清理 `agent-factory` 相关 Node 进程：
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" |
+  Where-Object { $_.CommandLine -like '*D:\work\laputta\agent-factory*' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+```
+
+然后重新执行：
+
+```powershell
+docker compose up -d
+pnpm db:push
+pnpm db:seed
+pnpm dev
+```
+
+如果 Web 返回 `500 Internal Server Error`，优先检查数据库结构是否落后于代码：
+
+```powershell
+pnpm db:push
+pnpm db:seed
+```
+
+再重新访问 `http://127.0.0.1:3000/`。常见症状是 PostgreSQL 日志中出现类似 `column "skills" does not exist` 或 `relation "factory_dnas" does not exist`，这通常表示本地数据库 schema 还没有同步。
 
 ### 1. 安装依赖
 
