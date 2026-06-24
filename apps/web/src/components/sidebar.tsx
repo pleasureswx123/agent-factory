@@ -163,19 +163,30 @@ export function Sidebar() {
       </div>
 
       <nav className={cn('mt-3 px-3', sidebarCollapsed && 'px-2')}>
-        <Link
-          href="/factory"
-          className={cn(
-            'flex items-center rounded-md text-sm',
-            sidebarCollapsed ? 'h-9 justify-center px-0' : 'gap-2 px-3 py-2',
-            pathname === '/factory'
-              ? 'bg-neutral-100 font-medium'
-              : 'text-neutral-600 hover:bg-neutral-50',
+        <div className="group flex items-center">
+          <Link
+            href="/factory"
+            className={cn(
+              'flex min-w-0 flex-1 items-center rounded-md text-sm',
+              sidebarCollapsed ? 'h-9 justify-center px-0' : 'gap-2 px-3 py-2',
+              pathname === '/factory'
+                ? 'bg-neutral-100 font-medium'
+                : 'text-neutral-600 hover:bg-neutral-50',
+            )}
+            title="Agent Factory"
+          >
+            <Factory size={16} /> {!sidebarCollapsed && 'Agent Factory'}
+          </Link>
+          {!sidebarCollapsed && (
+            <Link
+              href="/factory/settings"
+              className="ml-1 rounded p-1.5 text-neutral-400 opacity-0 transition-opacity hover:bg-neutral-100 hover:text-neutral-600 group-hover:opacity-100"
+              title="FactoryDNA 设置"
+            >
+              <Settings size={14} />
+            </Link>
           )}
-          title="Agent Factory"
-        >
-          <Factory size={16} /> {!sidebarCollapsed && 'Agent Factory'}
-        </Link>
+        </div>
       </nav>
 
       <div className={cn('mt-4 flex-1 overflow-y-auto px-3', sidebarCollapsed && 'px-2')}>

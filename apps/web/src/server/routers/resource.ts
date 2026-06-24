@@ -149,8 +149,7 @@ export const resourceRouter = router({
         const used = current.some(
           (d) =>
             d.modelProfileId === input.resourceId ||
-            d.skillIds.includes(input.resourceId) ||
-            d.toolIds.includes(input.resourceId) ||
+            d.modelProfileIds.includes(input.resourceId) ||
             d.knowledgeBaseIds.includes(input.resourceId),
         );
         if (used) {

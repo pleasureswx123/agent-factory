@@ -50,6 +50,35 @@ export type MemoryPolicy = {
   shortTerm?: { type: 'window'; maxMessages: number } | { type: 'summary'; maxTokens: number };
   longTerm?: { enabled: boolean; scope: 'agent' | 'conversation' };
 };
+export type AgentCapabilityBinding = {
+  id: string;
+  name: string;
+  description: string;
+  source: 'factory-default' | 'manual';
+  enabled: boolean;
+  reason?: string;
+};
+export type ReasoningMode = {
+  strategy: 'direct' | 'clarify_first' | 'plan_then_answer' | 'tool_first' | 'react';
+  selfCheck: boolean;
+  toolUse: 'none' | 'when_needed' | 'required';
+  maxIterations: number;
+  verboseTrace: boolean;
+  exposeReasoning: false;
+};
+export type FactoryDnaConfig = {
+  name: string;
+  icon: string;
+  description: string;
+  prompt: string;
+  rules: string[];
+  guidelines: string[];
+  skills: AgentCapabilityBinding[];
+  tools: AgentCapabilityBinding[];
+  modelProfileId?: string | null;
+  reasoningMode: ReasoningMode;
+  memoryPolicy: MemoryPolicy;
+};
 
 export type AgentRule = string;
 export type AgentGuideline = string;
@@ -151,6 +180,10 @@ export const agentDnas = pgTable(
     modelProfileId: uuid('model_profile_id').references((): AnyPgColumn => resources.id, {
       onDelete: 'set null',
     }),
+    modelProfileIds: jsonb('model_profile_ids')
+      .$type<string[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     rules: jsonb('rules').$type<AgentRule[]>().notNull().default(sql`'[]'::jsonb`),
     guidelines: jsonb('guidelines').$type<AgentGuideline[]>().notNull().default(sql`'[]'::jsonb`),
     testCases: jsonb('test_cases').$type<AgentTestCase[]>().notNull().default(sql`'[]'::jsonb`),
@@ -160,10 +193,18 @@ export const agentDnas = pgTable(
       .default(sql`'[]'::jsonb`),
     skillIds: jsonb('skill_ids').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
     toolIds: jsonb('tool_ids').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    skills: jsonb('skills').$type<AgentCapabilityBinding[]>().notNull().default(sql`'[]'::jsonb`),
+    tools: jsonb('tools').$type<AgentCapabilityBinding[]>().notNull().default(sql`'[]'::jsonb`),
     knowledgeBaseIds: jsonb('knowledge_base_ids')
       .$type<string[]>()
       .notNull()
       .default(sql`'[]'::jsonb`),
+    reasoningMode: jsonb('reasoning_mode')
+      .$type<ReasoningMode>()
+      .notNull()
+      .default(
+        sql`'{"strategy":"direct","selfCheck":false,"toolUse":"when_needed","maxIterations":3,"verboseTrace":false,"exposeReasoning":false}'::jsonb`,
+      ),
     memoryPolicy: jsonb('memory_policy').$type<MemoryPolicy>().notNull().default(sql`'{}'::jsonb`),
     status: dnaStatusEnum('status').notNull().default('draft'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -290,6 +331,39 @@ export const resources = pgTable(
   }),
 );
 
+// ===== FactoryDNA（系统内置 Meta-Agent 的可配置 DNA，singleton version history）=====
+
+export const factoryDnas = pgTable(
+  'factory_dnas',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    version: integer('version').notNull(),
+    name: varchar('name', { length: 128 }).notNull(),
+    icon: varchar('icon', { length: 64 }).notNull().default('factory'),
+    description: text('description').notNull().default(''),
+    prompt: text('prompt').notNull(),
+    rules: jsonb('rules').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    guidelines: jsonb('guidelines').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    skills: jsonb('skills').$type<AgentCapabilityBinding[]>().notNull().default(sql`'[]'::jsonb`),
+    tools: jsonb('tools').$type<AgentCapabilityBinding[]>().notNull().default(sql`'[]'::jsonb`),
+    modelProfileId: uuid('model_profile_id').references((): AnyPgColumn => resources.id, {
+      onDelete: 'set null',
+    }),
+    reasoningMode: jsonb('reasoning_mode')
+      .$type<ReasoningMode>()
+      .notNull()
+      .default(
+        sql`'{"strategy":"plan_then_answer","selfCheck":true,"toolUse":"when_needed","maxIterations":3,"verboseTrace":false,"exposeReasoning":false}'::jsonb`,
+      ),
+    memoryPolicy: jsonb('memory_policy').$type<MemoryPolicy>().notNull().default(sql`'{}'::jsonb`),
+    changeNote: text('change_note'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    versionUq: uniqueIndex('factory_dnas_version_uq').on(t.version),
+  }),
+);
+
 // ===== Agent Memory（长期记忆 KV）=====
 
 export const agentMemory = pgTable(
@@ -357,3 +431,5 @@ export type Resource = typeof resources.$inferSelect;
 export type NewResource = typeof resources.$inferInsert;
 export type Secret = typeof secrets.$inferSelect;
 export type NewSecret = typeof secrets.$inferInsert;
+export type FactoryDna = typeof factoryDnas.$inferSelect;
+export type NewFactoryDna = typeof factoryDnas.$inferInsert;

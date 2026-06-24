@@ -6,14 +6,19 @@ import {
   type Db,
   promptVersions,
   resources,
+  secrets,
 } from '@agent-os/db';
 import {
+  createAgentModelProviderSchema,
   createAgentSchema,
   DEFAULT_USER_ID,
   type DnaConfigInput,
+  deleteAgentModelProviderSchema,
   updateAgentBasicSchema,
   updateAgentDnaSchema,
+  updateAgentModelProviderSchema,
 } from '@agent-os/shared';
+import { encryptSecret, secretHint } from '@agent-os/shared/crypto';
 import { TRPCError } from '@trpc/server';
 import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { z } from 'zod';
@@ -42,6 +47,68 @@ async function nextPromptVersion(db: Db, agentId: string, content: string, note?
   return created;
 }
 
+async function createSecretRecord(db: Db, alias: string, value: string) {
+  const enc = encryptSecret(value);
+  const [created] = await db
+    .insert(secrets)
+    .values({
+      ownerId: DEFAULT_USER_ID,
+      alias,
+      ciphertext: enc.ciphertext,
+      iv: enc.iv,
+      authTag: enc.authTag,
+      encryptedDek: enc.encryptedDek,
+      hint: secretHint(value),
+    })
+    .returning();
+  if (!created) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: '保存密钥失败' });
+  return created;
+}
+
+async function currentAgentDnaForEdit(db: Db, agentId: string) {
+  const [agent] = await db
+    .select()
+    .from(agents)
+    .where(and(eq(agents.id, agentId), isNull(agents.deletedAt)))
+    .limit(1);
+  if (!agent) throw new TRPCError({ code: 'NOT_FOUND', message: 'Agent 不存在' });
+  if (!agent.currentDnaId) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Agent 配置缺失' });
+
+  const [currentDna] = await db
+    .select()
+    .from(agentDnas)
+    .where(eq(agentDnas.id, agent.currentDnaId))
+    .limit(1);
+  if (!currentDna) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Agent 配置缺失' });
+
+  const [prompt] = await db
+    .select()
+    .from(promptVersions)
+    .where(eq(promptVersions.id, currentDna.promptVersionId))
+    .limit(1);
+
+  return {
+    agent,
+    currentDna,
+    dnaInput: {
+      prompt: prompt?.content ?? '',
+      modelProfileId: currentDna.modelProfileId,
+      modelProfileIds: currentDna.modelProfileIds,
+      rules: currentDna.rules,
+      guidelines: currentDna.guidelines,
+      testCases: currentDna.testCases,
+      evaluationCriteria: currentDna.evaluationCriteria,
+      skills: currentDna.skills,
+      tools: currentDna.tools,
+      skillIds: currentDna.skillIds,
+      toolIds: currentDna.toolIds,
+      knowledgeBaseIds: currentDna.knowledgeBaseIds,
+      reasoningMode: currentDna.reasoningMode,
+      memoryPolicy: currentDna.memoryPolicy,
+    } satisfies DnaConfigInput,
+  };
+}
+
 /** 新建 DNA 版本并设为 Agent 当前配置 */
 async function createDnaVersion(
   db: Db,
@@ -62,13 +129,17 @@ async function createDnaVersion(
       version: (latest?.version ?? 0) + 1,
       promptVersionId,
       modelProfileId: dna.modelProfileId ?? null,
+      modelProfileIds: dna.modelProfileIds,
       rules: dna.rules,
       guidelines: dna.guidelines,
       testCases: dna.testCases,
       evaluationCriteria: dna.evaluationCriteria,
+      skills: dna.skills,
+      tools: dna.tools,
       skillIds: dna.skillIds,
       toolIds: dna.toolIds,
       knowledgeBaseIds: dna.knowledgeBaseIds,
+      reasoningMode: dna.reasoningMode,
       memoryPolicy: dna.memoryPolicy,
       status: 'published',
     })
@@ -119,8 +190,7 @@ export const agentRouter = router({
 
       const refIds = [
         ...(dna?.modelProfileId ? [dna.modelProfileId] : []),
-        ...(dna?.skillIds ?? []),
-        ...(dna?.toolIds ?? []),
+        ...(dna?.modelProfileIds ?? []),
         ...(dna?.knowledgeBaseIds ?? []),
       ];
       const refs = refIds.length
@@ -261,14 +331,175 @@ export const agentRouter = router({
       return createDnaVersion(ctx.db, input.agentId, pv.id, {
         prompt: target.content,
         modelProfileId: currentDna.modelProfileId,
+        modelProfileIds: currentDna.modelProfileIds,
         rules: currentDna.rules,
         guidelines: currentDna.guidelines,
         testCases: currentDna.testCases,
         evaluationCriteria: currentDna.evaluationCriteria,
+        skills: currentDna.skills,
+        tools: currentDna.tools,
         skillIds: currentDna.skillIds,
         toolIds: currentDna.toolIds,
         knowledgeBaseIds: currentDna.knowledgeBaseIds,
+        reasoningMode: currentDna.reasoningMode,
         memoryPolicy: currentDna.memoryPolicy,
       });
+    }),
+
+  createModelProvider: publicProcedure
+    .input(createAgentModelProviderSchema)
+    .mutation(async ({ ctx, input }) => {
+      const { currentDna, dnaInput } = await currentAgentDnaForEdit(ctx.db, input.agentId);
+      let secretId: string | null = null;
+      if (input.secretValue) {
+        const secret = await createSecretRecord(ctx.db, input.name, input.secretValue);
+        secretId = secret.id;
+      }
+      const [created] = await ctx.db
+        .insert(resources)
+        .values({
+          ownerId: DEFAULT_USER_ID,
+          type: 'provider',
+          name: input.name,
+          status: 'active',
+          config: {
+            agentId: input.agentId,
+            baseUrl: input.baseUrl,
+            modelId: input.modelId,
+            modality: input.modality,
+          },
+          secretId,
+        })
+        .returning();
+      if (!created)
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: '创建模型 Provider 失败' });
+
+      const modelProfileIds = Array.from(new Set([...dnaInput.modelProfileIds, created.id]));
+      await createDnaVersion(ctx.db, input.agentId, currentDna.promptVersionId, {
+        ...dnaInput,
+        modelProfileId: dnaInput.modelProfileId ?? created.id,
+        modelProfileIds,
+      });
+      return created;
+    }),
+
+  updateModelProvider: publicProcedure
+    .input(updateAgentModelProviderSchema)
+    .mutation(async ({ ctx, input }) => {
+      const { currentDna, dnaInput } = await currentAgentDnaForEdit(ctx.db, input.agentId);
+      const [provider] = await ctx.db
+        .select()
+        .from(resources)
+        .where(eq(resources.id, input.resourceId))
+        .limit(1);
+      if (provider?.type !== 'provider') {
+        throw new TRPCError({ code: 'NOT_FOUND', message: '模型 Provider 不存在' });
+      }
+      if (
+        provider.id !== dnaInput.modelProfileId &&
+        !dnaInput.modelProfileIds.includes(provider.id)
+      ) {
+        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: '该模型不属于当前 Agent' });
+      }
+
+      const config = {
+        ...(provider.config as Record<string, unknown>),
+        agentId: input.agentId,
+        baseUrl: input.baseUrl,
+        modelId: input.modelId,
+        modality: input.modality,
+      };
+      let resourceId = provider.id;
+      let updated = provider;
+
+      if ((provider.config as { agentId?: string }).agentId === input.agentId) {
+        const patch: Record<string, unknown> = {
+          name: input.name,
+          config,
+          updatedAt: new Date(),
+        };
+        if (input.secretValue) {
+          const secret = await createSecretRecord(ctx.db, input.name, input.secretValue);
+          patch.secretId = secret.id;
+        }
+        const [updatedProvider] = await ctx.db
+          .update(resources)
+          .set(patch)
+          .where(eq(resources.id, provider.id))
+          .returning();
+        if (!updatedProvider) {
+          throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: '更新模型 Provider 失败' });
+        }
+        updated = updatedProvider;
+      } else {
+        let secretId = provider.secretId;
+        if (input.secretValue) {
+          const secret = await createSecretRecord(ctx.db, input.name, input.secretValue);
+          secretId = secret.id;
+        }
+        const [createdProvider] = await ctx.db
+          .insert(resources)
+          .values({
+            ownerId: DEFAULT_USER_ID,
+            type: 'provider',
+            name: input.name,
+            status: 'active',
+            config,
+            secretId,
+          })
+          .returning();
+        if (!createdProvider) {
+          throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: '创建模型 Provider 失败' });
+        }
+        updated = createdProvider;
+        resourceId = createdProvider.id;
+
+        const replacedModelIds = dnaInput.modelProfileIds.map((id) =>
+          id === provider.id ? resourceId : id,
+        );
+        await createDnaVersion(ctx.db, input.agentId, currentDna.promptVersionId, {
+          ...dnaInput,
+          modelProfileId:
+            dnaInput.modelProfileId === provider.id ? resourceId : dnaInput.modelProfileId,
+          modelProfileIds: Array.from(new Set(replacedModelIds)),
+        });
+      }
+
+      return updated;
+    }),
+
+  deleteModelProvider: publicProcedure
+    .input(deleteAgentModelProviderSchema)
+    .mutation(async ({ ctx, input }) => {
+      const { currentDna, dnaInput } = await currentAgentDnaForEdit(ctx.db, input.agentId);
+      const [provider] = await ctx.db
+        .select()
+        .from(resources)
+        .where(eq(resources.id, input.resourceId))
+        .limit(1);
+      if (provider?.type !== 'provider') {
+        throw new TRPCError({ code: 'NOT_FOUND', message: '模型 Provider 不存在' });
+      }
+      if (
+        provider.id !== dnaInput.modelProfileId &&
+        !dnaInput.modelProfileIds.includes(provider.id)
+      ) {
+        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: '该模型不属于当前 Agent' });
+      }
+
+      const modelProfileIds = dnaInput.modelProfileIds.filter((id) => id !== input.resourceId);
+      await createDnaVersion(ctx.db, input.agentId, currentDna.promptVersionId, {
+        ...dnaInput,
+        modelProfileId:
+          dnaInput.modelProfileId === input.resourceId
+            ? (modelProfileIds[0] ?? null)
+            : dnaInput.modelProfileId,
+        modelProfileIds,
+      });
+
+      if ((provider.config as { agentId?: string }).agentId === input.agentId) {
+        await ctx.db.delete(resources).where(eq(resources.id, input.resourceId));
+      }
+      return { ok: true };
     }),
 });

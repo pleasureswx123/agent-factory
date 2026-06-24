@@ -7,6 +7,7 @@ import {
   AtSign,
   Brain,
   Check,
+  ChevronDown,
   Copy,
   ImageIcon,
   Pencil,
@@ -15,13 +16,20 @@ import {
   Send,
   Video,
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Badge, Button, Dialog, Field, Input, Textarea } from '@/components/ui';
 import { useWorkbenchStore } from '@/lib/store';
 import { trpc } from '@/lib/trpc';
-import { cn, consumeTextStream, RUNTIME_URL, readRuntimeError } from '@/lib/utils';
+import {
+  cn,
+  consumeTextStream,
+  providerOptionLabel,
+  RUNTIME_URL,
+  readRuntimeError,
+} from '@/lib/utils';
 import type { AppRouter } from '@/server/routers/_app';
 
 type PendingRef = { id: string; name: string };
@@ -282,6 +290,7 @@ function ResponseProcessPanel({
 
 export function ChatArea({ agentId, agentName }: { agentId: string; agentName: string }) {
   const { currentConversationId, setCurrentConversation } = useWorkbenchStore();
+  const router = useRouter();
   const utils = trpc.useUtils();
 
   const { data: messages = [] } = trpc.conversation.messages.useQuery(
@@ -299,6 +308,8 @@ export function ChatArea({ agentId, agentName }: { agentId: string; agentName: s
   const [input, setInput] = useState('');
   const [pendingRefs, setPendingRefs] = useState<PendingRef[]>([]);
   const [mentionOpen, setMentionOpen] = useState(false);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [selectedModelProfileId, setSelectedModelProfileId] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [streamText, setStreamText] = useState<string | null>(null);
   const [responseElapsedSeconds, setResponseElapsedSeconds] = useState(0);
@@ -329,12 +340,42 @@ export function ChatArea({ agentId, agentName }: { agentId: string; agentName: s
     artifacts.map((a) => a.messageId).filter((id): id is string => !!id),
   );
 
-  // 当前绑定模型的模态：用于发送后的等待提示
-  const boundProvider = agentData?.boundResources.find(
-    (r) => r.id === agentData.dna?.modelProfileId,
+  const configuredModelIds = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...(agentData?.dna?.modelProfileId ? [agentData.dna.modelProfileId] : []),
+          ...(agentData?.dna?.modelProfileIds ?? []),
+        ]),
+      ),
+    [agentData?.dna?.modelProfileId, agentData?.dna?.modelProfileIds],
   );
-  const modality = (boundProvider?.config as { modality?: string } | undefined)?.modality ?? 'text';
+  const modelProviders = useMemo(
+    () =>
+      agentData?.boundResources.filter(
+        (r) => r.type === 'provider' && configuredModelIds.includes(r.id),
+      ) ?? [],
+    [agentData?.boundResources, configuredModelIds],
+  );
+  const modelProviderIds = useMemo(
+    () => modelProviders.map((provider) => provider.id),
+    [modelProviders],
+  );
+  const defaultModelId = agentData?.dna?.modelProfileId ?? modelProviderIds[0] ?? null;
+  const selectedProvider =
+    modelProviders.find((r) => r.id === selectedModelProfileId) ?? modelProviders[0] ?? null;
+  const selectedModelLabel = selectedProvider
+    ? providerOptionLabel(selectedProvider)
+    : '未配置模型';
+  const modality =
+    (selectedProvider?.config as { modality?: string } | undefined)?.modality ?? 'text';
   const isResponding = streamText !== null;
+
+  useEffect(() => {
+    setSelectedModelProfileId((current) =>
+      current && modelProviderIds.includes(current) ? current : defaultModelId,
+    );
+  }, [defaultModelId, modelProviderIds]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: 消息变化时滚动到底部
   useEffect(() => {
@@ -380,6 +421,7 @@ export function ChatArea({ agentId, agentName }: { agentId: string; agentName: s
     }
     setEditingMessage(null);
     setMentionOpen(false);
+    setModelMenuOpen(false);
     try {
       let convId = currentConversationId;
       if (!convId) {
@@ -395,6 +437,7 @@ export function ChatArea({ agentId, agentName }: { agentId: string; agentName: s
           conversationId: convId,
           text,
           artifactIds,
+          modelProfileId: selectedModelProfileId ?? undefined,
           clientRequestId: crypto.randomUUID(),
           replaceMessageId: options?.replaceMessageId,
         }),
@@ -484,6 +527,7 @@ export function ChatArea({ agentId, agentName }: { agentId: string; agentName: s
   function handleInputChange(value: string) {
     setInput(value);
     setMentionOpen(/(^|\s)@$/.test(value));
+    if (/(^|\s)@$/.test(value)) setModelMenuOpen(false);
   }
 
   function pickMention(id: string, name: string) {
@@ -909,10 +953,43 @@ export function ChatArea({ agentId, agentName }: { agentId: string; agentName: s
                 ))}
               </div>
             )}
+            {modelMenuOpen && (
+              <div className="absolute bottom-full right-12 z-10 mb-1 w-64 overflow-hidden rounded-xl border border-neutral-200 bg-white py-1 shadow-lg">
+                {modelProviders.length === 0 ? (
+                  <div className="px-3 py-2 text-xs text-neutral-400">
+                    当前 Agent 暂未配置可用模型
+                  </div>
+                ) : (
+                  modelProviders.map((provider) => (
+                    <button
+                      key={provider.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedModelProfileId(provider.id);
+                        setModelMenuOpen(false);
+                      }}
+                      className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-neutral-50"
+                    >
+                      <span className="truncate">{providerOptionLabel(provider)}</span>
+                      {provider.id === selectedProvider?.id && (
+                        <Check size={15} className="shrink-0 text-neutral-700" />
+                      )}
+                    </button>
+                  ))
+                )}
+                <button
+                  type="button"
+                  onClick={() => router.push(`/agents/${agentId}`)}
+                  className="mt-1 flex w-full items-center border-t border-neutral-100 px-3 py-2 text-left text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+                >
+                  管理模型
+                </button>
+              </div>
+            )}
 
             <div
               className={cn(
-                'grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-end gap-2 rounded-[28px] border border-neutral-200 bg-white shadow-sm transition-[padding,box-shadow,border-color] duration-200 focus-within:border-neutral-300 focus-within:shadow-md',
+                'grid grid-cols-[auto_minmax(0,1fr)_auto_auto_auto] items-end gap-2 rounded-[28px] border border-neutral-200 bg-white shadow-sm transition-[padding,box-shadow,border-color] duration-200 focus-within:border-neutral-300 focus-within:shadow-md',
                 composerExpanded ? 'grid-rows-[auto_auto] px-5 py-3' : 'grid-rows-[auto] px-3 py-2',
               )}
             >
@@ -945,7 +1022,7 @@ export function ChatArea({ agentId, agentName }: { agentId: string; agentName: s
                 className={cn(
                   'resize-none overflow-y-hidden border-0 bg-transparent px-0 text-base shadow-none focus:border-transparent focus:outline-none',
                   composerExpanded
-                    ? 'col-span-4 col-start-1 row-start-1 min-h-16 py-0'
+                    ? 'col-span-5 col-start-1 row-start-1 min-h-16 py-0'
                     : 'col-start-2 row-start-1 min-h-10 py-2.5',
                 )}
                 onChange={(e) => handleInputChange(e.target.value)}
@@ -965,11 +1042,30 @@ export function ChatArea({ agentId, agentName }: { agentId: string; agentName: s
               <button
                 type="button"
                 className={cn(
-                  'mb-0.5 hidden h-9 shrink-0 items-center gap-1 rounded-full px-3 text-sm text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900 sm:flex',
+                  'mb-0.5 flex h-9 max-w-36 shrink-0 items-center gap-1 rounded-full px-3 text-sm text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900',
                   composerExpanded ? 'col-start-3 row-start-2' : 'col-start-3 row-start-1',
                 )}
+                title={`当前模型：${selectedModelLabel}`}
+                disabled={sending}
+                onClick={() => {
+                  setMentionOpen(false);
+                  setModelMenuOpen((open) => !open);
+                }}
+              >
+                <span className="truncate">{selectedModelLabel}</span>
+                <ChevronDown size={13} className="shrink-0" />
+              </button>
+              <button
+                type="button"
+                className={cn(
+                  'mb-0.5 hidden h-9 shrink-0 items-center gap-1 rounded-full px-3 text-sm text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900 sm:flex',
+                  composerExpanded ? 'col-start-4 row-start-2' : 'col-start-4 row-start-1',
+                )}
                 title="引用素材"
-                onClick={() => setMentionOpen(true)}
+                onClick={() => {
+                  setModelMenuOpen(false);
+                  setMentionOpen(true);
+                }}
               >
                 @ 素材
               </button>
@@ -977,7 +1073,7 @@ export function ChatArea({ agentId, agentName }: { agentId: string; agentName: s
                 type="button"
                 className={cn(
                   'flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-white transition-colors hover:bg-neutral-700 disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-400',
-                  composerExpanded ? 'col-start-4 row-start-2' : 'col-start-4 row-start-1',
+                  composerExpanded ? 'col-start-5 row-start-2' : 'col-start-5 row-start-1',
                 )}
                 disabled={sending || !input.trim()}
                 onClick={handleSend}

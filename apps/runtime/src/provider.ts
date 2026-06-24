@@ -1,10 +1,9 @@
-// 模型 Provider 解析：resources(provider) + secrets → 模型档案 / AI SDK LanguageModel
+// 模型 Provider 解析：resources(provider) + secrets → 模型档案 / LangChain ChatModel
 import { type Db, resources, secrets } from '@agent-os/db';
 import { MODEL_MODALITY_LABELS, type ModelModality } from '@agent-os/shared';
 import { decryptSecret } from '@agent-os/shared/crypto';
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import type { LanguageModel } from 'ai';
 import { eq } from 'drizzle-orm';
+import { buildLangChainChatModel } from './langchain-runtime';
 
 type ProviderConfig = {
   baseUrl?: string;
@@ -72,29 +71,19 @@ export async function resolveProviderProfile(
   };
 }
 
-/** 文本模态档案 → AI SDK LanguageModel（OpenAI 兼容 chat 接口） */
-export function buildLanguageModel(profile: ModelProfile): LanguageModel {
-  const openaiCompatible = createOpenAICompatible({
-    name: profile.name,
-    baseURL: profile.baseUrl,
-    apiKey: profile.apiKey,
-  });
-  return openaiCompatible(profile.modelId);
-}
-
 /** 仅文本对话场景（Factory 澄清 / 试跑）使用：非 text 模态给出明确报错 */
-export async function resolveModel(db: Db, modelProfileId: string): Promise<LanguageModel> {
+export async function resolveModel(db: Db, modelProfileId: string) {
   const profile = await resolveProviderProfile(db, modelProfileId);
   if (profile.modality !== 'text') {
     throw new Error(
       `模型 Provider「${profile.name}」是${MODEL_MODALITY_LABELS[profile.modality]}模型，此场景仅支持文本对话模型`,
     );
   }
-  return buildLanguageModel(profile);
+  return buildLangChainChatModel(profile);
 }
 
 /** Factory 对话使用：优先取标记为 Factory 默认的 provider，否则回退到第一个可用的文本模型 */
-export async function resolveDefaultModel(db: Db): Promise<LanguageModel> {
+export async function resolveDefaultModel(db: Db) {
   const rows = await db
     .select({ id: resources.id, status: resources.status, config: resources.config })
     .from(resources)

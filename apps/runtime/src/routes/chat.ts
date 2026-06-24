@@ -10,13 +10,16 @@ import {
   type MessageContent,
   messages,
   promptVersions,
+  type ReasoningMode,
 } from '@agent-os/db';
 import { chatRequestSchema } from '@agent-os/shared';
-import { type ModelMessage, streamText } from 'ai';
 import { and, asc, eq, gt, inArray } from 'drizzle-orm';
 import type { Context } from 'hono';
+import { agentTurnToTextResponse, runAgentTurn } from '../agent-runner';
+import { loadAgentTools } from '../agent-tools';
+import type { RuntimeChatMessage } from '../langchain-runtime';
 import { generateImage, generateVideo, saveGeneratedFile } from '../media';
-import { buildLanguageModel, resolveProviderProfile } from '../provider';
+import { resolveProviderProfile } from '../provider';
 
 function partsToText(content: MessageContent): string {
   return content
@@ -25,7 +28,37 @@ function partsToText(content: MessageContent): string {
     .join('\n');
 }
 
-function buildSystemPrompt(prompt: string, rules: string[], guidelines: string[]): string {
+function composeReasoningMode(mode: ReasoningMode): string {
+  const strategyText: Record<ReasoningMode['strategy'], string> = {
+    direct: '直接回答简单问题，不额外展开规划。',
+    clarify_first: '需求不清楚时先提出必要澄清问题，再执行任务。',
+    plan_then_answer: '复杂任务先内部规划步骤，再给出最终答案。',
+    tool_first: '需要事实、素材或外部信息时，优先判断是否应使用工具。',
+    react: '按“判断下一步-执行动作-观察结果-继续”的方式组织多步任务。',
+  };
+  const toolUseText: Record<ReasoningMode['toolUse'], string> = {
+    none: '不要调用工具，只基于已提供上下文回答。',
+    when_needed: '仅在任务需要时使用可用工具。',
+    required: '回答前必须优先使用合适工具获取上下文或证据。',
+  };
+  const lines = [
+    strategyText[mode.strategy],
+    toolUseText[mode.toolUse],
+    `工具循环最多 ${mode.maxIterations ?? 3} 轮，超过后停止并返回错误。`,
+    mode.selfCheck ? '最终回答前检查是否满足 Rules、输出格式和用户目标。' : '',
+    '不要暴露隐藏推理过程，只输出用户需要看到的结论、步骤或必要依据。',
+  ].filter(Boolean);
+  return `Reasoning Mode:\n${lines.map((line, i) => `${i + 1}. ${line}`).join('\n')}`;
+}
+
+function buildSystemPrompt(
+  prompt: string,
+  rules: string[],
+  guidelines: string[],
+  reasoningMode: ReasoningMode,
+  skills: { name: string; description: string; enabled: boolean }[],
+  tools: { id: string; name: string; description: string; enabled: boolean }[],
+): string {
   const sections = [prompt.trim()];
   if (rules.length > 0) {
     sections.push(`Rules:\n${rules.map((rule, i) => `${i + 1}. ${rule}`).join('\n')}`);
@@ -35,7 +68,34 @@ function buildSystemPrompt(prompt: string, rules: string[], guidelines: string[]
       `Guidelines:\n${guidelines.map((guideline, i) => `${i + 1}. ${guideline}`).join('\n')}`,
     );
   }
+  const enabledSkills = skills.filter((skill) => skill.enabled !== false);
+  if (enabledSkills.length > 0) {
+    sections.push(
+      `Skills:\n${enabledSkills
+        .map((skill, i) => `${i + 1}. ${skill.name}：${skill.description}`)
+        .join('\n')}`,
+    );
+  }
+  const enabledTools = tools.filter((tool) => tool.enabled !== false);
+  if (enabledTools.length > 0) {
+    sections.push(
+      `Available Tools:\n${enabledTools
+        .map((tool, i) => `${i + 1}. ${tool.id}（${tool.name}）：${tool.description}`)
+        .join('\n')}`,
+    );
+  }
+  sections.push(composeReasoningMode(reasoningMode));
   return sections.join('\n\n');
+}
+
+function buildChatHistory(
+  history: { role: string; content: MessageContent }[],
+): RuntimeChatMessage[] {
+  return history.flatMap((m) => {
+    if (m.role !== 'user' && m.role !== 'assistant') return [];
+    const text = partsToText(m.content);
+    return text ? [{ role: m.role, content: text }] : [];
+  });
 }
 
 async function artifactContext(db: Db, ids: string[]): Promise<string> {
@@ -51,7 +111,14 @@ async function artifactContext(db: Db, ids: string[]): Promise<string> {
 export async function handleChat(c: Context, db: Db) {
   const parsed = chatRequestSchema.safeParse(await c.req.json());
   if (!parsed.success) return c.json({ error: '请求参数不合法' }, 400);
-  const { conversationId, text, artifactIds, clientRequestId, replaceMessageId } = parsed.data;
+  const {
+    conversationId,
+    text,
+    artifactIds,
+    modelProfileId: requestedModelProfileId,
+    clientRequestId,
+    replaceMessageId,
+  } = parsed.data;
 
   const [conversation] = await db
     .select()
@@ -74,8 +141,16 @@ export async function handleChat(c: Context, db: Db) {
     .where(eq(agentDnas.id, agent.currentDnaId))
     .limit(1);
   if (!dna) return c.json({ error: 'Agent 配置缺失' }, 400);
-  if (!dna.modelProfileId) {
+  const configuredModelIds = Array.from(
+    new Set([...(dna.modelProfileId ? [dna.modelProfileId] : []), ...(dna.modelProfileIds ?? [])]),
+  );
+  const activeModelProfileId = requestedModelProfileId ?? dna.modelProfileId;
+
+  if (!activeModelProfileId) {
     return c.json({ error: '该 Agent 未绑定模型 Provider，请到配置详情的「模型」tab 设置' }, 400);
+  }
+  if (!configuredModelIds.includes(activeModelProfileId)) {
+    return c.json({ error: '所选模型不在当前 Agent 的模型列表中，请到配置详情调整' }, 400);
   }
 
   const [promptVersion] = await db
@@ -87,11 +162,14 @@ export async function handleChat(c: Context, db: Db) {
     promptVersion?.content ?? '你是一个乐于助人的 AI 助手。',
     dna.rules ?? [],
     dna.guidelines ?? [],
+    dna.reasoningMode,
+    dna.skills ?? [],
+    dna.tools ?? [],
   );
 
   let profile: Awaited<ReturnType<typeof resolveProviderProfile>>;
   try {
-    profile = await resolveProviderProfile(db, dna.modelProfileId);
+    profile = await resolveProviderProfile(db, activeModelProfileId);
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : '模型解析失败' }, 400);
   }
@@ -222,17 +300,26 @@ export async function handleChat(c: Context, db: Db) {
     .orderBy(asc(messages.createdAt));
   const windowed = history.filter((m) => m.id !== userMessageId).slice(-windowSize);
 
-  const modelMessages: ModelMessage[] = [{ role: 'system', content: systemPrompt }];
-  for (const m of windowed) {
-    if (m.role !== 'user' && m.role !== 'assistant') continue;
-    const t = partsToText(m.content);
-    if (t) modelMessages.push({ role: m.role, content: t });
+  const executableTools =
+    dna.reasoningMode.toolUse === 'none'
+      ? []
+      : loadAgentTools(dna.tools ?? [], { db, artifactIds });
+  if (dna.reasoningMode.toolUse === 'required' && executableTools.length === 0) {
+    return c.json({ error: '当前 Agent 没有可执行工具，请先在「模型与绑定」中启用工具' }, 400);
   }
-  modelMessages.push({ role: 'user', content: text + refContext });
 
-  const result = streamText({
-    model: buildLanguageModel(profile),
-    messages: modelMessages,
+  const turn = await runAgentTurn({
+    modelProfile: profile,
+    systemPrompt,
+    history: buildChatHistory(windowed),
+    input: text + refContext,
+    tools: executableTools,
+    maxIterations: dna.reasoningMode.maxIterations ?? 3,
+    verboseTrace: dna.reasoningMode.verboseTrace ?? false,
+  });
+
+  return agentTurnToTextResponse(turn, {
+    headers: { 'x-message-id': assistantMessageId },
     onFinish: async ({ text: fullText, usage }) => {
       await db.insert(messages).values({
         id: assistantMessageId,
@@ -240,15 +327,12 @@ export async function handleChat(c: Context, db: Db) {
         role: 'assistant',
         content: [{ type: 'text', text: fullText }],
         tokenUsage: {
-          promptTokens: usage.inputTokens ?? 0,
-          completionTokens: usage.outputTokens ?? 0,
-          totalTokens: usage.totalTokens ?? 0,
+          promptTokens: usage?.promptTokens ?? 0,
+          completionTokens: usage?.completionTokens ?? 0,
+          totalTokens: usage?.totalTokens ?? 0,
         },
+        toolCalls: turn.trace && turn.trace.length > 0 ? turn.trace : undefined,
       });
     },
-  });
-
-  return result.toTextStreamResponse({
-    headers: { 'x-message-id': assistantMessageId },
   });
 }

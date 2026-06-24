@@ -3,12 +3,27 @@
 // Agent Factory：左侧需求澄清对话，右侧四步创建流程
 // 1 需求澄清 -> 2 选择候选 Agent -> 3 配置 DNA -> 4 测试并创建
 import {
+  AGENT_SKILL_CATALOG,
+  AGENT_TOOL_CATALOG,
+  type AgentCapabilityBindingInput,
   type AgentSuggestion,
   parseAgentSuggestions,
+  recommendAgentCapabilities,
   recommendAgentResourceIds,
   stripSuggestionBlocks,
 } from '@agent-os/shared';
-import { Bot, ChevronLeft, Play, Plus, Send, Sparkles } from 'lucide-react';
+import {
+  Bot,
+  ChevronLeft,
+  Factory as FactoryIcon,
+  Play,
+  Plus,
+  Send,
+  Settings,
+  Sparkles,
+  WandSparkles,
+} from 'lucide-react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { type PointerEvent as ReactPointerEvent, useRef, useState } from 'react';
 import { Badge, Button, Field, Input, Select, Textarea } from '@/components/ui';
@@ -39,6 +54,9 @@ type DnaDraft = {
   testCases: { name: string; input: string; expected: string }[];
   evaluationCriteria: string[];
   modelProfileId: string | null;
+  modelProfileIds: string[];
+  skills: AgentCapabilityBindingInput[];
+  tools: AgentCapabilityBindingInput[];
   skillIds: string[];
   toolIds: string[];
   knowledgeBaseIds: string[];
@@ -53,6 +71,9 @@ const EMPTY_DRAFT: DnaDraft = {
   testCases: [],
   evaluationCriteria: [],
   modelProfileId: null,
+  modelProfileIds: [],
+  skills: [],
+  tools: [],
   skillIds: [],
   toolIds: [],
   knowledgeBaseIds: [],
@@ -61,6 +82,12 @@ const EMPTY_DRAFT: DnaDraft = {
 const STEPS = ['需求澄清', '选择候选', '配置 DNA', '测试发布'] as const;
 const MIN_FACTORY_PANEL_WIDTH = 360;
 const MAX_FACTORY_PANEL_WIDTH = 720;
+const FACTORY_ICON_MAP = {
+  factory: FactoryIcon,
+  sparkles: Sparkles,
+  bot: Bot,
+  wand: WandSparkles,
+};
 
 function clampFactoryPanelWidth(width: number) {
   const viewportMax =
@@ -79,9 +106,8 @@ export default function FactoryPage() {
   const utils = trpc.useUtils();
 
   const { data: resourceList = [] } = trpc.resource.list.useQuery({});
+  const { data: factoryDna } = trpc.factory.getDna.useQuery();
   const providers = resourceList.filter((r) => r.type === 'provider');
-  const skills = resourceList.filter((r) => r.type === 'skill');
-  const tools = resourceList.filter((r) => r.type === 'tool');
   const kbs = resourceList.filter((r) => r.type === 'knowledge_base');
 
   const createAgent = trpc.agent.create.useMutation();
@@ -109,6 +135,8 @@ export default function FactoryPage() {
   const composerExpanded = input.includes('\n');
   const resizeStartRef = useRef<{ pointerX: number; width: number } | null>(null);
   const panelWidth = clampFactoryPanelWidth(factoryPanelWidth || DEFAULT_FACTORY_PANEL_WIDTH);
+  const HeaderIcon =
+    FACTORY_ICON_MAP[factoryDna?.dna.icon as keyof typeof FACTORY_ICON_MAP] ?? FactoryIcon;
 
   function handleResizePointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
     event.preventDefault();
@@ -167,10 +195,9 @@ export default function FactoryPage() {
   }
 
   function pickSuggestion(s: AgentSuggestion) {
-    const recommended = recommendAgentResourceIds(
-      `${s.name}\n${s.description}\n${s.reason}\n${s.systemPrompt ?? ''}`,
-      resourceList,
-    );
+    const agentText = `${s.name}\n${s.description}\n${s.reason}\n${s.systemPrompt ?? ''}`;
+    const recommended = recommendAgentResourceIds(agentText, resourceList);
+    const capabilities = recommendAgentCapabilities(agentText);
     setDraft({
       ...EMPTY_DRAFT,
       name: s.name,
@@ -181,8 +208,11 @@ export default function FactoryPage() {
       testCases: s.testCases ?? [],
       evaluationCriteria: s.evaluationCriteria ?? [],
       modelProfileId: providers[0]?.id ?? null,
-      skillIds: recommended.skillIds,
-      toolIds: recommended.toolIds,
+      modelProfileIds: providers[0]?.id ? [providers[0].id] : [],
+      skills: s.skills?.length ? s.skills : capabilities.skills,
+      tools: s.tools?.length ? s.tools : capabilities.tools,
+      skillIds: [],
+      toolIds: [],
       knowledgeBaseIds: recommended.knowledgeBaseIds,
     });
     setTestInput(s.testCases?.[0]?.input ?? '');
@@ -258,8 +288,16 @@ export default function FactoryPage() {
         rules: draft.rules,
         guidelines: draft.guidelines,
         modelProfileId: draft.modelProfileId,
+        modelProfileIds: Array.from(
+          new Set([
+            ...(draft.modelProfileId ? [draft.modelProfileId] : []),
+            ...draft.modelProfileIds,
+          ]),
+        ),
         testCases: draft.testCases,
         evaluationCriteria: draft.evaluationCriteria,
+        skills: draft.skills,
+        tools: draft.tools,
         skillIds: draft.skillIds,
         toolIds: draft.toolIds,
         knowledgeBaseIds: draft.knowledgeBaseIds,
@@ -276,6 +314,26 @@ export default function FactoryPage() {
       ...d,
       [key]: d[key].includes(id) ? d[key].filter((v) => v !== id) : [...d[key], id],
     }));
+  }
+
+  function toggleCapability(key: 'skills' | 'tools', capability: AgentCapabilityBindingInput) {
+    setDraft((d) => {
+      const exists = d[key].some((item) => item.id === capability.id);
+      return {
+        ...d,
+        [key]: exists
+          ? d[key].filter((item) => item.id !== capability.id)
+          : [
+              ...d[key],
+              {
+                ...capability,
+                source: 'manual',
+                enabled: true,
+                reason: '用户在 Agent 配置中手动添加',
+              },
+            ],
+      };
+    });
   }
 
   function updateDraftTestCase(
@@ -302,9 +360,18 @@ export default function FactoryPage() {
       {/* 左侧：需求澄清对话 */}
       <div className="flex min-w-0 flex-1 flex-col bg-white">
         <header className="flex items-center gap-2 border-b border-neutral-200 bg-white px-6 py-3">
-          <Sparkles size={18} className="text-neutral-500" />
-          <h1 className="text-sm font-semibold">Agent Factory</h1>
-          <span className="text-xs text-neutral-400">用自然语言描述需求，推导要创建的 Agent</span>
+          <HeaderIcon size={18} className="text-neutral-500" />
+          <h1 className="text-sm font-semibold">{factoryDna?.dna.name ?? 'Agent Factory'}</h1>
+          <span className="text-xs text-neutral-400">
+            {factoryDna?.dna.description || '用自然语言描述需求，推导要创建的 Agent'}
+          </span>
+          <Link
+            href="/factory/settings"
+            className="ml-auto rounded p-1.5 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
+            title="FactoryDNA 设置"
+          >
+            <Settings size={15} />
+          </Link>
         </header>
 
         <div className="flex-1 overflow-y-auto px-6 py-4">
@@ -454,7 +521,11 @@ export default function FactoryPage() {
                 variant="outline"
                 className="mt-4"
                 onClick={() => {
-                  setDraft({ ...EMPTY_DRAFT, modelProfileId: providers[0]?.id ?? null });
+                  setDraft({
+                    ...EMPTY_DRAFT,
+                    modelProfileId: providers[0]?.id ?? null,
+                    modelProfileIds: providers[0]?.id ? [providers[0].id] : [],
+                  });
                   setStep(2);
                 }}
               >
@@ -489,7 +560,11 @@ export default function FactoryPage() {
                 variant="outline"
                 size="sm"
                 onClick={() => {
-                  setDraft({ ...EMPTY_DRAFT, modelProfileId: providers[0]?.id ?? null });
+                  setDraft({
+                    ...EMPTY_DRAFT,
+                    modelProfileId: providers[0]?.id ?? null,
+                    modelProfileIds: providers[0]?.id ? [providers[0].id] : [],
+                  });
                   setStep(2);
                 }}
               >
@@ -625,7 +700,16 @@ export default function FactoryPage() {
                 <Select
                   value={draft.modelProfileId ?? ''}
                   onChange={(e) =>
-                    setDraft((d) => ({ ...d, modelProfileId: e.target.value || null }))
+                    setDraft((d) => {
+                      const modelProfileId = e.target.value || null;
+                      return {
+                        ...d,
+                        modelProfileId,
+                        modelProfileIds: modelProfileId
+                          ? Array.from(new Set([modelProfileId, ...d.modelProfileIds]))
+                          : d.modelProfileIds,
+                      };
+                    })
                   }
                 >
                   <option value="">（未绑定，使用默认）</option>
@@ -643,11 +727,31 @@ export default function FactoryPage() {
               </Field>
               {(
                 [
-                  ['skillIds', 'Skills', skills],
-                  ['toolIds', 'Tools', tools],
-                  ['knowledgeBaseIds', '知识库', kbs],
+                  ['skills', 'Skills', AGENT_SKILL_CATALOG],
+                  ['tools', 'Tools', AGENT_TOOL_CATALOG],
                 ] as const
               ).map(([key, label, list]) => (
+                <Field key={key} label={label}>
+                  <div className="flex flex-wrap gap-1.5">
+                    {list.map((capability) => {
+                      const active = draft[key].some((item) => item.id === capability.id);
+                      return (
+                        <button
+                          key={capability.id}
+                          type="button"
+                          onClick={() => toggleCapability(key, capability)}
+                        >
+                          <Badge tone={active ? 'blue' : 'neutral'}>{capability.name}</Badge>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-1 text-xs text-neutral-400">
+                    这些能力属于当前 Agent 的 DNA，不来自资源与凭证。
+                  </p>
+                </Field>
+              ))}
+              {([['knowledgeBaseIds', '知识库', kbs]] as const).map(([key, label, list]) => (
                 <Field key={key} label={label}>
                   <div className="flex flex-wrap gap-1.5">
                     {list.length === 0 && <span className="text-xs text-neutral-400">暂无</span>}

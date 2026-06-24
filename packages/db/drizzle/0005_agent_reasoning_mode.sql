@@ -1,0 +1,1 @@
+ALTER TABLE "agent_dnas" ADD COLUMN IF NOT EXISTS "reasoning_mode" jsonb DEFAULT '{"strategy":"direct","selfCheck":false,"toolUse":"when_needed","maxIterations":3,"verboseTrace":false,"exposeReasoning":false}'::jsonb NOT NULL;

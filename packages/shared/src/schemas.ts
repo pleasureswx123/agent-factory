@@ -1,6 +1,9 @@
 // 跨前后端共享的 zod schema（tRPC 输入校验 + 表单校验单一事实源）
 import { z } from 'zod';
 
+export const modelModalitySchema = z.enum(['text', 'image', 'video']);
+export type ModelModality = z.infer<typeof modelModalitySchema>;
+
 // ===== Agent =====
 
 export const memoryPolicySchema = z.object({
@@ -13,6 +16,29 @@ export const memoryPolicySchema = z.object({
   longTerm: z.object({ enabled: z.boolean(), scope: z.enum(['agent', 'conversation']) }).optional(),
 });
 export type MemoryPolicyInput = z.infer<typeof memoryPolicySchema>;
+
+export const agentCapabilitySourceSchema = z.enum(['factory-default', 'manual']);
+export const agentCapabilityBindingSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string().default(''),
+  source: agentCapabilitySourceSchema.default('manual'),
+  enabled: z.boolean().default(true),
+  reason: z.string().optional(),
+});
+export type AgentCapabilityBindingInput = z.infer<typeof agentCapabilityBindingSchema>;
+
+export const reasoningModeSchema = z.object({
+  strategy: z
+    .enum(['direct', 'clarify_first', 'plan_then_answer', 'tool_first', 'react'])
+    .default('direct'),
+  selfCheck: z.boolean().default(false),
+  toolUse: z.enum(['none', 'when_needed', 'required']).default('when_needed'),
+  maxIterations: z.number().int().min(1).max(10).default(3),
+  verboseTrace: z.boolean().default(false),
+  exposeReasoning: z.literal(false).default(false),
+});
+export type ReasoningModeInput = z.infer<typeof reasoningModeSchema>;
 
 export const dnaConfigSchema = z.object({
   rules: z.array(z.string().min(1)).default([]),
@@ -29,9 +55,20 @@ export const dnaConfigSchema = z.object({
     .default([]),
   evaluationCriteria: z.array(z.string().min(1)).default([]),
   modelProfileId: z.string().uuid().nullable().optional(),
+  modelProfileIds: z.array(z.string().uuid()).default([]),
+  skills: z.array(agentCapabilityBindingSchema).default([]),
+  tools: z.array(agentCapabilityBindingSchema).default([]),
   skillIds: z.array(z.string().uuid()).default([]),
   toolIds: z.array(z.string().uuid()).default([]),
   knowledgeBaseIds: z.array(z.string().uuid()).default([]),
+  reasoningMode: reasoningModeSchema.default({
+    strategy: 'direct',
+    selfCheck: false,
+    toolUse: 'when_needed',
+    maxIterations: 3,
+    verboseTrace: false,
+    exposeReasoning: false,
+  }),
   memoryPolicy: memoryPolicySchema.default({}),
 });
 export type DnaConfigInput = z.infer<typeof dnaConfigSchema>;
@@ -55,6 +92,26 @@ export const updateAgentDnaSchema = z.object({
   agentId: z.string().uuid(),
   dna: dnaConfigSchema,
   changeNote: z.string().max(500).optional(),
+});
+
+export const createAgentModelProviderSchema = z.object({
+  agentId: z.string().uuid(),
+  name: z.string().min(1, 'Provider 名称不能为空').max(128),
+  baseUrl: z.string().url('BaseURL 格式不正确'),
+  modelId: z.string().min(1, '模型 ID 不能为空'),
+  modality: modelModalitySchema.default('text'),
+  secretValue: z.string().min(1).optional(),
+});
+export type CreateAgentModelProviderInput = z.infer<typeof createAgentModelProviderSchema>;
+
+export const updateAgentModelProviderSchema = createAgentModelProviderSchema.extend({
+  resourceId: z.string().uuid(),
+});
+export type UpdateAgentModelProviderInput = z.infer<typeof updateAgentModelProviderSchema>;
+
+export const deleteAgentModelProviderSchema = z.object({
+  agentId: z.string().uuid(),
+  resourceId: z.string().uuid(),
 });
 
 // ===== Conversation / Message =====
@@ -104,9 +161,6 @@ export const resourceTypeSchema = z.enum([
   'tool',
   'knowledge_base',
 ]);
-
-export const modelModalitySchema = z.enum(['text', 'image', 'video']);
-export type ModelModality = z.infer<typeof modelModalitySchema>;
 
 export const providerConfigSchema = z.object({
   baseUrl: z.string().url('BaseURL 格式不正确'),

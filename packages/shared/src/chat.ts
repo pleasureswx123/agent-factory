@@ -6,6 +6,7 @@ export const chatRequestSchema = z.object({
   conversationId: z.string().uuid(),
   text: z.string().min(1),
   artifactIds: z.array(z.string().uuid()).default([]),
+  modelProfileId: z.string().uuid().optional(),
   clientRequestId: z.string().uuid().optional(),
   replaceMessageId: z.string().uuid().optional(),
 });
@@ -59,6 +60,8 @@ export type AgentSuggestion = {
   rules?: string[];
   guidelines?: string[];
   systemPrompt?: string;
+  skills?: AgentCapabilityBindingInput[];
+  tools?: AgentCapabilityBindingInput[];
   testCases?: { name: string; input: string; expected: string }[];
   evaluationCriteria?: string[];
 };
@@ -96,6 +99,26 @@ export function parseAgentSuggestions(text: string): AgentSuggestion[] {
                 ? item.guidelines.filter((v: unknown): v is string => typeof v === 'string')
                 : undefined,
               systemPrompt: typeof item.systemPrompt === 'string' ? item.systemPrompt : undefined,
+              skills: Array.isArray(item.skills)
+                ? item.skills.filter((v: unknown): v is AgentCapabilityBindingInput => {
+                    return (
+                      !!v &&
+                      typeof v === 'object' &&
+                      typeof (v as { id?: unknown }).id === 'string' &&
+                      typeof (v as { name?: unknown }).name === 'string'
+                    );
+                  })
+                : undefined,
+              tools: Array.isArray(item.tools)
+                ? item.tools.filter((v: unknown): v is AgentCapabilityBindingInput => {
+                    return (
+                      !!v &&
+                      typeof v === 'object' &&
+                      typeof (v as { id?: unknown }).id === 'string' &&
+                      typeof (v as { name?: unknown }).name === 'string'
+                    );
+                  })
+                : undefined,
               testCases: Array.isArray(item.testCases)
                 ? item.testCases
                     .filter(isAgentSuggestionTestCase)
@@ -123,3 +146,5 @@ export function parseAgentSuggestions(text: string): AgentSuggestion[] {
 export function stripSuggestionBlocks(text: string): string {
   return text.replace(suggestionBlockRe, '').trim();
 }
+
+import type { AgentCapabilityBindingInput } from './schemas';

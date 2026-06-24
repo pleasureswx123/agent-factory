@@ -7,14 +7,15 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc --noEmit",
     "start": "tsx src/index.ts",
+    "test": "tsx src/langchain-runtime.test.ts && tsx src/agent-runner.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@agent-os/db": "workspace:*",
     "@agent-os/shared": "workspace:*",
-    "@ai-sdk/openai-compatible": "^1.0.0",
     "@hono/node-server": "^1.13.0",
-    "ai": "^5.0.0",
+    "@langchain/core": "^1.2.0",
+    "@langchain/openai": "^1.5.1",
     "drizzle-orm": "^0.36.0",
     "hono": "^4.6.0",
     "postgres": "^3.4.0",
