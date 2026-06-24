@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS builder
+FROM docker.m.daocloud.io/library/node:22-bookworm-slim AS builder
 
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
@@ -16,7 +16,7 @@ ENV NEXT_PUBLIC_RUNTIME_URL=$NEXT_PUBLIC_RUNTIME_URL
 
 RUN pnpm build
 
-FROM node:22-bookworm-slim AS app
+FROM docker.m.daocloud.io/library/node:22-bookworm-slim AS app
 
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
