@@ -1,0 +1,62 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: agentos
+    volumes:
+      - agent_factory_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d agentos"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  runtime:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_RUNTIME_URL: http://192.168.10.122:39082
+    image: agent-factory-app:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/agentos
+      PORT: 4001
+      HOST: 0.0.0.0
+      WEB_URL: http://192.168.10.122:39081
+      RUNTIME_CORS_ORIGINS: http://192.168.10.122:39081,http://localhost:39081,http://127.0.0.1:39081
+    ports:
+      - "39082:4001"
+    volumes:
+      - agent_factory_keys:/root/.agent-os
+
+  web:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_RUNTIME_URL: http://192.168.10.122:39082
+    image: agent-factory-app:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      runtime:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/agentos
+      NEXT_PUBLIC_RUNTIME_URL: http://192.168.10.122:39082
+    ports:
+      - "39081:3000"
+    volumes:
+      - agent_factory_uploads:/app/apps/web/data/uploads
+      - agent_factory_keys:/root/.agent-os
+
+volumes:
+  agent_factory_pgdata:
+  agent_factory_uploads:
+  agent_factory_keys:

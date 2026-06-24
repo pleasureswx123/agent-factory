@@ -13,11 +13,18 @@ import {
 const app = new Hono();
 const db = getDb();
 
-// 本地单用户工具：仅放行本机 web 端
+const corsOrigins = (
+  process.env.RUNTIME_CORS_ORIGINS ?? 'http://localhost:3000,http://127.0.0.1:3000'
+)
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+// 本地单用户工具：默认仅放行本机 web 端，容器部署时通过环境变量补充访问地址
 app.use(
   '*',
   cors({
-    origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+    origin: corsOrigins,
     exposeHeaders: ['x-message-id'],
   }),
 );
@@ -38,7 +45,8 @@ app.onError((err, c) => {
 });
 
 const port = Number(process.env.PORT ?? 4001);
+const hostname = process.env.HOST ?? '127.0.0.1';
 
-serve({ fetch: app.fetch, port, hostname: '127.0.0.1' }, ({ port }) => {
-  console.log(`[runtime] listening on http://127.0.0.1:${port}`);
+serve({ fetch: app.fetch, port, hostname }, ({ port }) => {
+  console.log(`[runtime] listening on http://${hostname}:${port}`);
 });
