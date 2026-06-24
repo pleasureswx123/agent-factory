@@ -20,6 +20,7 @@ services:
       args:
         NEXT_PUBLIC_RUNTIME_URL: http://192.168.10.122:39082
     image: agent-factory-app:latest
+    command: ["pnpm", "--filter", "@agent-os/runtime", "start"]
     restart: unless-stopped
     depends_on:
       postgres:
@@ -41,6 +42,7 @@ services:
       args:
         NEXT_PUBLIC_RUNTIME_URL: http://192.168.10.122:39082
     image: agent-factory-app:latest
+    command: ["pnpm", "--filter", "@agent-os/web", "start"]
     restart: unless-stopped
     depends_on:
       postgres:
